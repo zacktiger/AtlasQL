@@ -25,11 +25,18 @@ Connection settings default to the docker-compose database. Override with
 ```bash
 python -m atlasql.cli init-db                # apply sql/*.sql, idempotent
 python -m atlasql.cli import-natural-earth   # continents + countries
-python -m atlasql.cli import-world-bank      # GDP per capita, country tier
-python -m atlasql.cli import-elevation       # mean/min/max from GMTED2010
-python -m atlasql.cli import-rivers          # length + major river count
+python -m atlasql.cli import-states          # states/provinces under countries
+python -m atlasql.cli import-world-bank      # GDP per capita, country tier only
+python -m atlasql.cli import-elevation --level country
+python -m atlasql.cli import-elevation --level state
+python -m atlasql.cli import-rivers --level country
+python -m atlasql.cli import-rivers --level state
 python -m atlasql.cli refresh-availability   # every job already does this
 ```
+
+The metric jobs take `--level`, because giving a new tier its metrics is
+running the same job with a different argument. Nothing in the query engine
+knows how many tiers exist.
 
 Every job is idempotent and upserts, so re-running is always safe. Source
 archives are cached under `data/raw/` after the first download — around 1.6 GB
@@ -73,6 +80,18 @@ curl -X POST localhost:8000/query -H 'content-type: application/json' -d '{
 A query naming a metric with too little coverage at the level it would run at
 comes back as HTTP 422 naming the blocking metric and its actual coverage. That
 is the intended answer, not an empty result set.
+
+## What is loaded
+
+| Tier | Regions | Metrics |
+|---|---|---|
+| Continent | 7 | none yet |
+| Country | 258 | GDP per capita, elevation (mean/min/max), river length, major rivers |
+| State | 4,596 | elevation (mean/min/max), river length, major rivers |
+
+GDP per capita exists at country level and nowhere below it, because no
+reliable global subnational source does. That is not a gap to paper over: it is
+why a state-level query mentioning GDP is refused by name.
 
 ## Tests
 

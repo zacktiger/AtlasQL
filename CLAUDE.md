@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phase 1 (country tier) is in progress. Two design documents govern the work; read both before writing anything:
+Phase 1 (country tier) and phase 2 (state tier) are done, and the structured
+frontend is built. Next per the plan's build order: the city tier via GeoNames,
+then `/parse`. Two design documents govern the work; read both before writing
+anything:
 
 - `high-level-vision.md` — the product vision and long-term direction. Read it when deciding *whether* a design is right.
 - `geo-query-engine-plan.md` — the concrete v1 architecture, schema, data sources, and build order. Read it before starting each phase for the *how*.
@@ -20,9 +23,10 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python -m atlasql.cli init-db   # apply sql/*.sql, idempotent
 .venv/Scripts/python -m atlasql.cli import-natural-earth
+.venv/Scripts/python -m atlasql.cli import-states
 .venv/Scripts/python -m atlasql.cli import-world-bank
-.venv/Scripts/python -m atlasql.cli import-elevation
-.venv/Scripts/python -m atlasql.cli import-rivers
+.venv/Scripts/python -m atlasql.cli import-elevation --level country
+.venv/Scripts/python -m atlasql.cli import-rivers --level state
 .venv/Scripts/python -m pytest                # DB tests skip if it is not up
 .venv/Scripts/python -m uvicorn atlasql.api:app --reload
 ```
