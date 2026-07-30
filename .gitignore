@@ -11,3 +11,6 @@ venv/
 
 # Local overrides
 .env
+
+# Playwright MCP screenshots and console dumps from browser review
+.playwright-mcp/
