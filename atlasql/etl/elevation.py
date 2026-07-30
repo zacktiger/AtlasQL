@@ -130,8 +130,15 @@ def _overlaps(region: dict, tile: Tile) -> bool:
     )
 
 
-def import_elevation(level: str = "country") -> None:
-    """Compute elevation statistics for every region at `level`. Safe to re-run."""
+def import_elevation(level: str = "country", allow_missing_tiles: bool = False) -> None:
+    """Compute elevation statistics for every region at `level`. Safe to re-run.
+
+    A tile that cannot be fetched aborts the run unless `allow_missing_tiles`
+    is set. Skipping one looks harmless in the log and is not: the regions it
+    covers end up with no elevation, coverage drops, and level auto-detection
+    quietly changes its mind. Tiles are cached, so re-running after a transient
+    failure only refetches what is actually missing.
+    """
     regions = _regions_for(level)
     if not regions:
         raise RuntimeError(f"no regions with geometry at level {level!r}")
@@ -147,6 +154,14 @@ def import_elevation(level: str = "country") -> None:
     )
     paths = download.fetch_many([(t.url, t.filename) for t in tiles])
 
+    unavailable = [t.name for t in tiles if t.filename not in paths]
+    if unavailable and not allow_missing_tiles:
+        raise RuntimeError(
+            f"{len(unavailable)} DEM tiles could not be fetched: "
+            f"{', '.join(unavailable)}. Re-run to retry just these (downloads "
+            "are cached), or pass allow_missing_tiles to accept the gap."
+        )
+
     # Summed values and cell counts, accumulated across tiles per region.
     totals: dict[int, float] = defaultdict(float)
     counts: dict[int, int] = defaultdict(int)
@@ -157,9 +172,8 @@ def import_elevation(level: str = "country") -> None:
         covered = [r for r in regions if _overlaps(r, tile)]
         path = paths.get(tile.filename)
         if path is None:
-            # GMTED omits a few tiles that are entirely ocean.
             log.warning("tile %s unavailable, skipping", tile.name)
-            continue
+            continue  # only reachable with allow_missing_tiles
 
         stats = zonal_stats(
             [r["geometry"] for r in covered],

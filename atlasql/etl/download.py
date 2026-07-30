@@ -18,11 +18,24 @@ from atlasql import config
 log = logging.getLogger(__name__)
 
 
-def fetch(url: str, filename: str | None = None, mirrors: list[str] | None = None) -> Path:
+ATTEMPTS_PER_SOURCE = 3
+
+
+def fetch(
+    url: str,
+    filename: str | None = None,
+    mirrors: list[str] | None = None,
+    attempts: int = ATTEMPTS_PER_SOURCE,
+) -> Path:
     """Download `url` into data/raw unless it is already there.
 
     `mirrors` are tried in order if the primary host fails; Natural Earth's CDN
     in particular goes down often enough to be worth a fallback.
+
+    Each source is retried, because the failure that actually happens on these
+    hosts is a truncated body rather than a refused connection - and a
+    truncated tile silently shrinks a metric's coverage, which silently changes
+    which level a query runs at.
     """
     config.RAW_DIR.mkdir(parents=True, exist_ok=True)
     target = config.RAW_DIR / (filename or url.rsplit("/", 1)[-1])
@@ -32,24 +45,38 @@ def fetch(url: str, filename: str | None = None, mirrors: list[str] | None = Non
 
     errors: list[str] = []
     for candidate in [url, *(mirrors or [])]:
-        try:
-            log.info("downloading %s", candidate)
-            # Written to a .part file first so an interrupted download is never
-            # mistaken for a cache hit next run.
-            partial = target.with_suffix(target.suffix + ".part")
-            with httpx.stream(
-                "GET", candidate, follow_redirects=True, timeout=120.0
-            ) as response:
-                response.raise_for_status()
-                with partial.open("wb") as handle:
-                    for chunk in response.iter_bytes(chunk_size=1 << 20):
-                        handle.write(chunk)
-            partial.replace(target)
-            log.info("saved %s (%.1f MB)", target.name, target.stat().st_size / 1e6)
-            return target
-        except Exception as exc:  # noqa: BLE001 - report every mirror's failure
-            errors.append(f"{candidate}: {exc}")
-            log.warning("download failed from %s: %s", candidate, exc)
+        for attempt in range(1, attempts + 1):
+            try:
+                log.info("downloading %s", candidate)
+                # Written to a .part file first so an interrupted download is
+                # never mistaken for a cache hit next run.
+                partial = target.with_suffix(target.suffix + ".part")
+                with httpx.stream(
+                    "GET", candidate, follow_redirects=True, timeout=120.0
+                ) as response:
+                    response.raise_for_status()
+                    expected = response.headers.get("content-length")
+                    written = 0
+                    with partial.open("wb") as handle:
+                        for chunk in response.iter_bytes(chunk_size=1 << 20):
+                            handle.write(chunk)
+                            written += len(chunk)
+                if expected is not None and written != int(expected):
+                    raise OSError(
+                        f"truncated download: got {written} bytes, expected {expected}"
+                    )
+                partial.replace(target)
+                log.info("saved %s (%.1f MB)", target.name, target.stat().st_size / 1e6)
+                return target
+            except Exception as exc:  # noqa: BLE001 - every attempt is reported
+                errors.append(f"{candidate} (attempt {attempt}): {exc}")
+                log.warning(
+                    "download failed from %s (attempt %d/%d): %s",
+                    candidate,
+                    attempt,
+                    attempts,
+                    exc,
+                )
 
     raise RuntimeError("all download sources failed:\n  " + "\n  ".join(errors))
 
