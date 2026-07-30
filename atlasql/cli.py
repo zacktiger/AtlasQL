@@ -30,6 +30,18 @@ def _import_world_bank(_: argparse.Namespace) -> None:
     world_bank.import_gdp_per_capita()
 
 
+def _import_elevation(_: argparse.Namespace) -> None:
+    from atlasql.etl import elevation
+
+    elevation.import_elevation()
+
+
+def _import_rivers(_: argparse.Namespace) -> None:
+    from atlasql.etl import rivers
+
+    rivers.import_rivers()
+
+
 def _refresh_availability(_: argparse.Namespace) -> None:
     from atlasql.etl import availability
 
@@ -45,6 +57,14 @@ COMMANDS = {
     "import-world-bank": (
         _import_world_bank,
         "Import World Bank GDP per capita onto countries",
+    ),
+    "import-elevation": (
+        _import_elevation,
+        "Compute mean/min/max elevation per country from GMTED2010",
+    ),
+    "import-rivers": (
+        _import_rivers,
+        "Stage HydroRIVERS and aggregate river length/count per country",
     ),
     "refresh-availability": (
         _refresh_availability,

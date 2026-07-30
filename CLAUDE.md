@@ -20,8 +20,16 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python -m atlasql.cli init-db   # apply sql/*.sql, idempotent
 .venv/Scripts/python -m atlasql.cli import-natural-earth
+.venv/Scripts/python -m atlasql.cli import-world-bank
+.venv/Scripts/python -m atlasql.cli import-elevation
+.venv/Scripts/python -m atlasql.cli import-rivers
 .venv/Scripts/python -m pytest                # DB tests skip if it is not up
+.venv/Scripts/python -m uvicorn atlasql.api:app --reload
 ```
+
+The elevation and rivers imports each download roughly half a gigabyte or more
+on first run and take tens of minutes; both resume from cached files and from
+partially staged data, so an interrupted run is restarted, not repeated.
 
 Paths above are Windows (`.venv/Scripts`); use `.venv/bin` elsewhere. The host
 port is 55432 rather than 5432/5433 because a locally installed Postgres often

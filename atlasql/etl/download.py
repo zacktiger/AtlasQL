@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -51,6 +52,33 @@ def fetch(url: str, filename: str | None = None, mirrors: list[str] | None = Non
             log.warning("download failed from %s: %s", candidate, exc)
 
     raise RuntimeError("all download sources failed:\n  " + "\n  ".join(errors))
+
+
+def fetch_many(
+    requests: list[tuple[str, str]], workers: int = 6
+) -> dict[str, Path]:
+    """Fetch several files concurrently, returning {filename: path}.
+
+    Hosts serving these archives throttle each connection rather than the
+    client, so several connections at once is the difference between minutes
+    and hours on a tiled dataset. Failures are raised after every download has
+    been attempted, so one missing tile does not hide the rest.
+    """
+    results: dict[str, Path] = {}
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(fetch, url, filename): filename for url, filename in requests
+        }
+        for future in as_completed(futures):
+            filename = futures[future]
+            try:
+                results[filename] = future.result()
+            except Exception as exc:  # noqa: BLE001 - collected and reported below
+                errors.append(f"{filename}: {exc}")
+    if errors:
+        log.warning("%d of %d downloads failed:\n  %s", len(errors), len(requests), "\n  ".join(errors))
+    return results
 
 
 def unzip(archive: Path, subdir: str | None = None) -> Path:
