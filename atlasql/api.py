@@ -1,0 +1,106 @@
+"""HTTP surface: GET /metadata and POST /query.
+
+Both read the live database. /metadata in particular is generated from the
+metric registry and the coverage table, never from a hardcoded list, so adding
+a metric through an ETL job makes it queryable and selectable in the UI without
+a code change or a frontend deploy.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+from atlasql import config, db, query
+from atlasql.models import GeoFilter, QueryResult
+
+log = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="AtlasQL",
+    description="A query engine over the world's administrative hierarchy.",
+    version="0.1.0",
+)
+
+
+class MetricInfo(BaseModel):
+    name: str
+    label: str
+    unit: str | None
+    description: str | None
+    source: str | None
+    # Coverage per level, so a client can grey out combinations that would be
+    # rejected rather than letting a user build a query that cannot run.
+    coverage_pct: dict[str, float]
+    levels_with_data: list[str]
+
+
+class LevelInfo(BaseModel):
+    name: str
+    region_count: int
+
+
+class Metadata(BaseModel):
+    levels: list[LevelInfo]
+    metrics: list[MetricInfo]
+    coverage_threshold_pct: float
+
+
+@app.exception_handler(query.QueryError)
+async def _query_error_handler(_, exc: query.QueryError) -> JSONResponse:
+    # 422: the request is well formed but cannot be answered against the data
+    # that exists. The body names the metric responsible.
+    return JSONResponse(status_code=422, content=exc.as_dict())
+
+
+@app.get("/health")
+def health() -> dict:
+    with db.connect() as conn:
+        conn.execute("SELECT 1")
+    return {"status": "ok"}
+
+
+@app.get("/metadata", response_model=Metadata)
+def metadata() -> Metadata:
+    with db.connect() as conn:
+        registry = query.registered_metrics(conn)
+        coverage = query.coverage_map(conn)
+        level_rows = conn.execute(
+            "SELECT level, count(*) AS n FROM regions GROUP BY level"
+        ).fetchall()
+
+    counts = {row["level"]: row["n"] for row in level_rows}
+    levels = [
+        LevelInfo(name=level, region_count=counts[level])
+        for level in config.LEVELS
+        if level in counts
+    ]
+    metrics = [
+        MetricInfo(
+            name=name,
+            label=info["label"],
+            unit=info["unit"],
+            description=info["description"],
+            source=info["source"],
+            coverage_pct=coverage.get(name, {}),
+            levels_with_data=[
+                level
+                for level in config.LEVELS
+                if coverage.get(name, {}).get(level, 0.0) >= config.COVERAGE_THRESHOLD_PCT
+            ],
+        )
+        for name, info in registry.items()
+    ]
+    return Metadata(
+        levels=levels,
+        metrics=metrics,
+        coverage_threshold_pct=config.COVERAGE_THRESHOLD_PCT,
+    )
+
+
+@app.post("/query", response_model=QueryResult)
+def run_query(geo_filter: GeoFilter) -> QueryResult:
+    return query.run(geo_filter)

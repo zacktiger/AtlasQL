@@ -7,9 +7,16 @@ geopandas==1.1.1
 pyogrio==0.11.1
 shapely==2.1.1
 pandas==2.3.1
+rasterio==1.4.3
+rasterstats==0.20.0
 
 # HTTP
 httpx==0.28.1
+
+# API
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
 
 # Dev
 pytest==8.4.1
