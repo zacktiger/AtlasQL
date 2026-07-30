@@ -1,0 +1,13 @@
+# Downloaded source data. Every file here is reproducible from an ETL job.
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local overrides
+.env

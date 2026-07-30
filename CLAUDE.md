@@ -4,14 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-There is no code yet. Two design documents govern the work; read both before writing anything:
+Phase 1 (country tier) is in progress. Two design documents govern the work; read both before writing anything:
 
 - `high-level-vision.md` — the product vision and long-term direction. Read it when deciding *whether* a design is right.
 - `geo-query-engine-plan.md` — the concrete v1 architecture, schema, data sources, and build order. Read it before starting each phase for the *how*.
 
 Where they disagree, the plan wins for what to build now and the vision wins for what not to foreclose. Note the vision doc names the product **TerraQuery** while the repo and remote are **AtlasQL** — treat them as the same product.
 
-Because nothing is scaffolded, there are no build/lint/test commands to run. When you create the first package, add its commands to this file. The plan commits to Python + FastAPI + PostgreSQL/PostGIS for the backend and a JS frontend; follow that unless the user redirects.
+The plan commits to Python + FastAPI + PostgreSQL/PostGIS for the backend and a JS frontend; follow that unless the user redirects.
+
+## Commands
+
+```bash
+docker compose up -d                          # PostGIS on localhost:55432
+.venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/python -m atlasql.cli init-db   # apply sql/*.sql, idempotent
+.venv/Scripts/python -m atlasql.cli import-natural-earth
+.venv/Scripts/python -m pytest                # DB tests skip if it is not up
+```
+
+Paths above are Windows (`.venv/Scripts`); use `.venv/bin` elsewhere. The host
+port is 55432 rather than 5432/5433 because a locally installed Postgres often
+holds those, and on Windows it can win the bind race against Docker — which
+shows up as a password-authentication failure, not a connection refusal.
+Override the connection with `ATLASQL_DATABASE_URL` (see `.env.example`).
+
+Downloaded source archives are cached in `data/` (gitignored); deleting it only
+costs a re-download.
 
 ## Git workflow
 

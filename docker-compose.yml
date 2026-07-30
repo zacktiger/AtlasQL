@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: atlasql-db
+    environment:
+      POSTGRES_USER: atlasql
+      POSTGRES_PASSWORD: atlasql
+      POSTGRES_DB: atlasql
+    ports:
+      # High host port: a locally installed Postgres commonly holds 5432/5433,
+      # and on Windows both can bind the same port with the local one winning,
+      # which surfaces as a confusing password-authentication failure.
+      - "55432:5432"
+    volumes:
+      - atlasql-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlasql -d atlasql"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  atlasql-pgdata:

@@ -1,0 +1,15 @@
+# Database
+psycopg[binary]==3.2.9
+SQLAlchemy==2.0.41
+
+# Geospatial ETL
+geopandas==1.1.1
+pyogrio==0.11.1
+shapely==2.1.1
+pandas==2.3.1
+
+# HTTP
+httpx==0.28.1
+
+# Dev
+pytest==8.4.1
