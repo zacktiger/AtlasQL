@@ -24,7 +24,7 @@ import logging
 import geopandas as gpd
 
 from atlasql import db
-from atlasql.etl import download
+from atlasql.etl import availability, download
 from atlasql.etl.regions import RegionRow, upsert_regions
 
 log = logging.getLogger(__name__)
@@ -140,6 +140,10 @@ def import_countries() -> None:
             )
 
         upsert_regions(conn, country_rows)
+        # Adding regions moves the denominator of every coverage percentage, so
+        # a boundary import invalidates availability just as a metric import
+        # does.
+        availability.refresh(conn)
 
     if orphans:
         # Reachable only if Natural Earth adds a feature under the pseudo
