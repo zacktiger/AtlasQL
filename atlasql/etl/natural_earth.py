@@ -25,7 +25,7 @@ import geopandas as gpd
 
 from atlasql import db
 from atlasql.etl import availability, download
-from atlasql.etl.regions import RegionRow, upsert_regions
+from atlasql.etl.regions import RegionRow, existing_ids, upsert_regions
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +34,17 @@ ADMIN0_MIRRORS = [
     "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_0_countries.zip",
 ]
 
+ADMIN1_URL = (
+    "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_1_states_provinces.zip"
+)
+ADMIN1_MIRRORS = [
+    "https://naturalearth.s3.amazonaws.com/10m_cultural/"
+    "ne_10m_admin_1_states_provinces.zip",
+]
+
 COUNTRY_SOURCE = "natural_earth_admin0"
 CONTINENT_SOURCE = "natural_earth_continent"
+STATE_SOURCE = "natural_earth_admin1"
 
 # Natural Earth files remote islands under this pseudo continent. It is not a
 # continent, so it never becomes a region.
@@ -57,12 +66,14 @@ CONTINENT_OVERRIDES = {
 }
 
 
-def load_admin0() -> gpd.GeoDataFrame:
-    """Download (once) and read the Natural Earth admin-0 layer in EPSG:4326."""
-    archive = download.fetch(
-        ADMIN0_URL, filename="ne_10m_admin_0_countries.zip", mirrors=ADMIN0_MIRRORS
-    )
-    directory = download.unzip(archive, subdir="ne_10m_admin_0_countries")
+def _load_layer(url: str, filename: str, mirrors: list[str]) -> gpd.GeoDataFrame:
+    """Download (once) and read a Natural Earth layer in EPSG:4326.
+
+    Column names are lowercased because Natural Earth is not consistent about
+    their case between the admin-0 and admin-1 layers.
+    """
+    archive = download.fetch(url, filename=filename, mirrors=mirrors)
+    directory = download.unzip(archive, subdir=filename.removesuffix(".zip"))
     shapefiles = list(directory.glob("*.shp"))
     if len(shapefiles) != 1:
         raise RuntimeError(f"expected exactly one .shp in {directory}, found {shapefiles}")
@@ -72,37 +83,54 @@ def load_admin0() -> gpd.GeoDataFrame:
         raise RuntimeError("Natural Earth layer has no CRS")
     if gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
-    log.info("read %d admin-0 features", len(gdf))
+    gdf.columns = [c if c == "geometry" else c.lower() for c in gdf.columns]
+    log.info("read %d features from %s", len(gdf), filename)
     return gdf
 
 
-def _country_name(row) -> str:
-    """Prefer the English name, fall back to the admin name."""
-    for column in ("NAME_EN", "ADMIN", "NAME"):
+def load_admin0() -> gpd.GeoDataFrame:
+    """The Natural Earth admin-0 (country) layer."""
+    return _load_layer(ADMIN0_URL, "ne_10m_admin_0_countries.zip", ADMIN0_MIRRORS)
+
+
+def load_admin1() -> gpd.GeoDataFrame:
+    """The Natural Earth admin-1 (state/province) layer."""
+    return _load_layer(
+        ADMIN1_URL, "ne_10m_admin_1_states_provinces.zip", ADMIN1_MIRRORS
+    )
+
+
+def _feature_name(row, columns: tuple[str, ...], key: str) -> str:
+    """Prefer the English name, fall back to whatever the layer provides."""
+    for column in columns:
         value = row.get(column)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    raise RuntimeError(f"no usable name for feature {row.get('ADM0_A3')!r}")
+    raise RuntimeError(f"no usable name for feature {row.get(key)!r}")
+
+
+def _country_name(row) -> str:
+    return _feature_name(row, ("name_en", "admin", "name"), "adm0_a3")
 
 
 def import_countries() -> None:
     """Import continents and countries. Safe to re-run."""
     gdf = load_admin0()
 
-    missing = [c for c in ("ADM0_A3", "CONTINENT", "geometry") if c not in gdf.columns]
+    missing = [c for c in ("adm0_a3", "continent", "geometry") if c not in gdf.columns]
     if missing:
         raise RuntimeError(f"Natural Earth layer missing expected columns: {missing}")
 
-    duplicates = gdf["ADM0_A3"].duplicated(keep=False)
+    duplicates = gdf["adm0_a3"].duplicated(keep=False)
     if duplicates.any():
         # Not fatal on its own, but it would silently collapse two countries
         # into one region, so it has to be visible rather than swallowed.
         raise RuntimeError(
-            "duplicate ADM0_A3 codes in the source layer: "
-            f"{sorted(gdf.loc[duplicates, 'ADM0_A3'].unique())}"
+            "duplicate adm0_a3 codes in the source layer: "
+            f"{sorted(gdf.loc[duplicates, 'adm0_a3'].unique())}"
         )
 
-    continents = gdf[gdf["CONTINENT"] != NOT_A_CONTINENT].dissolve(by="CONTINENT")
+    continents = gdf[gdf["continent"] != NOT_A_CONTINENT].dissolve(by="continent")
     log.info("dissolved %d continents from admin-0", len(continents))
 
     continent_rows: list[RegionRow] = [
@@ -123,8 +151,8 @@ def import_countries() -> None:
         country_rows: list[RegionRow] = []
         orphans: list[str] = []
         for _, row in gdf.iterrows():
-            code = str(row["ADM0_A3"])
-            continent = CONTINENT_OVERRIDES.get(code, row["CONTINENT"])
+            code = str(row["adm0_a3"])
+            continent = CONTINENT_OVERRIDES.get(code, row["continent"])
             parent_id = continent_ids.get(continent)
             if parent_id is None:
                 orphans.append(f"{_country_name(row)} [{code}]")
@@ -155,6 +183,78 @@ def import_countries() -> None:
             ", ".join(sorted(orphans)),
         )
     log.info("imported %d countries under %d continents", len(country_rows), len(continent_rows))
+
+
+def import_states() -> None:
+    """Import the admin-1 tier (states and provinces) worldwide. Safe to re-run.
+
+    Every country's first-level divisions are imported, not one chosen
+    country's. The plan asks for one clean example of a state tier, and the
+    honest way to get one is to load the layer as it comes: filtering to a
+    single country would be a special case in the pipeline, and a tier that
+    only works for one country is the thing the vision warns against.
+
+    States hang off the country regions by adm0_a3, the same code the country
+    import uses as its source id.
+    """
+    gdf = load_admin1()
+
+    missing = [c for c in ("adm1_code", "adm0_a3", "geometry") if c not in gdf.columns]
+    if missing:
+        raise RuntimeError(f"Natural Earth admin-1 layer missing columns: {missing}")
+
+    duplicates = gdf["adm1_code"].duplicated(keep=False)
+    if duplicates.any():
+        raise RuntimeError(
+            "duplicate adm1_code values in the source layer: "
+            f"{sorted(gdf.loc[duplicates, 'adm1_code'].unique())[:10]}"
+        )
+
+    with db.connect() as conn:
+        country_ids = existing_ids(conn, COUNTRY_SOURCE)
+        if not country_ids:
+            raise RuntimeError("no country regions found; run import-natural-earth first")
+
+        rows: list[RegionRow] = []
+        orphans: set[str] = set()
+        skipped_empty = 0
+        for _, row in gdf.iterrows():
+            geometry = row["geometry"]
+            if geometry is None or geometry.is_empty:
+                # Natural Earth carries a few admin-1 records with no polygon.
+                # A region with no geometry cannot take zonal statistics or a
+                # river intersection, so it is left out rather than stored as a
+                # row that silently never matches anything.
+                skipped_empty += 1
+                continue
+            code = str(row["adm0_a3"])
+            parent_id = country_ids.get(code)
+            if parent_id is None:
+                orphans.add(code)
+                continue
+            rows.append(
+                {
+                    "name": _feature_name(row, ("name_en", "name", "adm1_code"), "adm1_code"),
+                    "level": "state",
+                    "parent_id": parent_id,
+                    "source": STATE_SOURCE,
+                    "source_id": str(row["adm1_code"]),
+                    "wkb": geometry.wkb,
+                }
+            )
+
+        upsert_regions(conn, rows)
+        availability.refresh(conn)
+
+    if skipped_empty:
+        log.warning("%d admin-1 features had no geometry and were skipped", skipped_empty)
+    if orphans:
+        log.warning(
+            "%d admin-1 features reference a country with no region: %s",
+            len(orphans),
+            ", ".join(sorted(orphans)),
+        )
+    log.info("imported %d states under %d countries", len(rows), len(country_ids))
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience entry point
