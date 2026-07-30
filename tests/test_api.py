@@ -73,6 +73,15 @@ def test_unknown_metric_returns_422_not_an_empty_result(client):
     assert response.json()["blocking_metric"] == "unicorn_density"
 
 
+def test_frontend_is_served_without_shadowing_the_api(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "AtlasQL" in page.text
+    # The static mount sits at the root, so this guards against it swallowing
+    # the API routes.
+    assert client.get("/metadata").status_code == 200
+
+
 def test_malformed_filter_is_rejected_by_the_schema(client):
     response = client.post(
         "/query",

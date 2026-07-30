@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AtlasQL</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>AtlasQL</h1>
+    <p class="tagline">Search the world itself, not dataset by dataset.</p>
+  </header>
+
+  <main>
+    <section class="builder" aria-label="Query builder">
+      <div class="row">
+        <label for="level">Level</label>
+        <select id="level"></select>
+        <span class="hint" id="level-hint"></span>
+      </div>
+
+      <fieldset>
+        <legend>Conditions</legend>
+        <div id="conditions"></div>
+        <button type="button" id="add-condition" class="secondary">+ Add condition</button>
+      </fieldset>
+
+      <div class="row">
+        <label for="sort-by">Sort by</label>
+        <select id="sort-by"></select>
+        <select id="order">
+          <option value="desc">highest first</option>
+          <option value="asc">lowest first</option>
+        </select>
+        <label for="top-n">Top</label>
+        <input type="number" id="top-n" value="10" min="1" max="100">
+      </div>
+
+      <div class="row actions">
+        <button type="button" id="run">Run query</button>
+        <span class="hint" id="status"></span>
+      </div>
+    </section>
+
+    <section id="error" class="error" hidden>
+      <h2>This query cannot be answered</h2>
+      <p id="error-message"></p>
+      <p id="error-detail" class="hint"></p>
+    </section>
+
+    <section id="results-panel" hidden>
+      <h2 id="results-summary"></h2>
+      <div class="table-scroll">
+        <table id="results">
+          <thead><tr id="results-head"></tr></thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <details id="filter-panel">
+      <summary>GeoFilter sent to the API</summary>
+      <pre id="filter-json"></pre>
+    </details>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

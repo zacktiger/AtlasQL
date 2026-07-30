@@ -12,6 +12,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from atlasql import config, db, query
@@ -104,3 +105,13 @@ def metadata() -> Metadata:
 @app.post("/query", response_model=QueryResult)
 def run_query(geo_filter: GeoFilter) -> QueryResult:
     return query.run(geo_filter)
+
+
+# The query builder is static files with no build step, served from the same
+# origin as the API so there is one process to run and no CORS to configure.
+# Mounted last so it cannot shadow an API route.
+_FRONTEND_DIR = config.REPO_ROOT / "frontend"
+if _FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
+else:  # pragma: no cover - only when running from a partial checkout
+    log.warning("frontend directory %s not found; API only", _FRONTEND_DIR)

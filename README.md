@@ -39,11 +39,21 @@ Each job recomputes `metric_availability` in its own transaction. Coverage that
 lags the data it describes does not fail loudly, it silently changes which
 level a query runs at.
 
-## API
+## App and API
 
 ```bash
-python -m uvicorn atlasql.api:app --reload
+python -m uvicorn atlasql.api:app --reload   # UI and API on localhost:8000
 ```
+
+Open <http://localhost:8000/> for the query builder: pick a level (or leave it
+on Auto), add conditions, run. The metric and level dropdowns, their units and
+their coverage percentages all come from `/metadata`, so a metric added by an
+ETL job appears after a reload with no frontend change. Every condition shows
+which levels actually have data for it, and a query that cannot be answered
+shows the API's refusal naming the blocking metric rather than an empty table.
+
+The frontend is static files served by the same app — no build step, no second
+process.
 
 - `GET /metadata` — metrics with per-level coverage, and levels with region
   counts. Generated from the live registry, so adding a metric through an ETL
