@@ -10,6 +10,10 @@
   <header>
     <h1>AtlasQL</h1>
     <p class="tagline">Search the world itself, not dataset by dataset.</p>
+    <label class="compare-switch">
+      <input type="checkbox" id="compare-toggle">
+      Compare two queries
+    </label>
   </header>
 
   <main>
@@ -25,7 +29,7 @@
       </p>
     </section>
 
-    <section class="builder" aria-label="Query builder">
+    <section id="builder" class="builder" aria-label="Query builder">
       <div class="row">
         <label for="level">Level</label>
         <select id="level"></select>
@@ -52,6 +56,95 @@
       <div class="row actions">
         <button type="button" id="run">Run query</button>
         <span class="hint" id="status"></span>
+      </div>
+    </section>
+
+    <!-- Compare mode: two independent builders, each producing its own
+         GeoFilter and hitting the same /query endpoint as the single-query
+         path above. There is still exactly one way to run a filter; this just
+         runs it twice and lines up the two result tables. No map here - a
+         second globe would fight the first one for the same screen space
+         without adding an answer the tables don't already give. -->
+    <section id="compare-panel" class="builder" aria-label="Compare two queries" hidden>
+      <div class="compare-grid">
+        <div class="compare-column">
+          <h2>Query A</h2>
+          <div class="row">
+            <label for="level-a">Level</label>
+            <select id="level-a"></select>
+            <span class="hint" id="level-hint-a"></span>
+          </div>
+          <fieldset>
+            <legend>Conditions</legend>
+            <div id="conditions-a"></div>
+            <button type="button" id="add-condition-a" class="secondary">+ Add condition</button>
+          </fieldset>
+          <div class="row">
+            <label for="sort-by-a">Sort by</label>
+            <select id="sort-by-a"></select>
+            <select id="order-a">
+              <option value="desc">highest first</option>
+              <option value="asc">lowest first</option>
+            </select>
+            <label for="top-n-a">Top</label>
+            <input type="number" id="top-n-a" value="10" min="1" max="100">
+          </div>
+        </div>
+
+        <div class="compare-column">
+          <h2>Query B</h2>
+          <div class="row">
+            <label for="level-b">Level</label>
+            <select id="level-b"></select>
+            <span class="hint" id="level-hint-b"></span>
+          </div>
+          <fieldset>
+            <legend>Conditions</legend>
+            <div id="conditions-b"></div>
+            <button type="button" id="add-condition-b" class="secondary">+ Add condition</button>
+          </fieldset>
+          <div class="row">
+            <label for="sort-by-b">Sort by</label>
+            <select id="sort-by-b"></select>
+            <select id="order-b">
+              <option value="desc">highest first</option>
+              <option value="asc">lowest first</option>
+            </select>
+            <label for="top-n-b">Top</label>
+            <input type="number" id="top-n-b" value="10" min="1" max="100">
+          </div>
+        </div>
+      </div>
+
+      <div class="row actions">
+        <button type="button" id="run-compare">Run comparison</button>
+        <span class="hint" id="compare-status"></span>
+      </div>
+    </section>
+
+    <section id="compare-error" class="error" hidden>
+      <h2>This comparison cannot be answered</h2>
+      <p id="compare-error-message"></p>
+    </section>
+
+    <section id="compare-results" class="compare-grid" hidden>
+      <div class="compare-column">
+        <h2 id="compare-summary-a"></h2>
+        <div class="table-scroll">
+          <table id="compare-table-a">
+            <thead><tr id="compare-head-a"></tr></thead>
+            <tbody id="compare-body-a"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="compare-column">
+        <h2 id="compare-summary-b"></h2>
+        <div class="table-scroll">
+          <table id="compare-table-b">
+            <thead><tr id="compare-head-b"></tr></thead>
+            <tbody id="compare-body-b"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 

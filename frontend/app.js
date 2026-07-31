@@ -42,54 +42,223 @@ let detailRequested = false;
 
 const $ = (id) => document.getElementById(id);
 
+// A query builder is five bound controls (level, conditions, sort, order,
+// top-n) plus the behaviour that keeps them consistent with /metadata. The
+// single-query panel and each side of the compare panel are three instances
+// of exactly this, never three copies of the logic - that would let them
+// drift out of sync with what GeoFilter actually accepts.
+function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, levelHint }) {
+  function addCondition(metricName) {
+    const id = ++conditionSeq;
+    const row = document.createElement("div");
+    row.className = "condition";
+    row.dataset.id = id;
+
+    const metric = document.createElement("select");
+    metric.className = "metric";
+    for (const entry of metadata.metrics) {
+      metric.appendChild(new Option(entry.label, entry.name));
+    }
+    if (metricName) metric.value = metricName;
+
+    const op = document.createElement("select");
+    op.className = "op";
+    for (const entry of OPERATORS) op.appendChild(new Option(entry.label, entry.value));
+
+    const value = document.createElement("input");
+    value.type = "number";
+    value.className = "value";
+    value.step = "any";
+    value.placeholder = "value";
+
+    const unit = document.createElement("span");
+    unit.className = "unit";
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove";
+    remove.textContent = "×";
+    remove.title = "Remove this condition";
+    remove.onclick = () => {
+      row.remove();
+      updateHints();
+    };
+
+    const hint = document.createElement("span");
+    hint.className = "hint coverage";
+
+    metric.onchange = updateHints;
+    row.append(metric, op, value, unit, remove, hint);
+    conditions.appendChild(row);
+    updateHints();
+  }
+
+  // Coverage is shown next to every metric so the reason a query will be
+  // refused is visible before it is run, rather than only in the error.
+  function updateHints() {
+    if (!metadata) return;
+    const threshold = metadata.coverage_threshold_pct;
+    const lvl = level.value;
+
+    for (const row of conditions.querySelectorAll(".condition")) {
+      const metric = metricByName(row.querySelector(".metric").value);
+      row.querySelector(".unit").textContent = metric?.unit ?? "";
+      const hint = row.querySelector(".coverage");
+      if (!metric) continue;
+
+      const levels = metric.levels_with_data;
+      if (levels.length === 0) {
+        hint.textContent = "no level has enough data for this metric";
+        hint.classList.add("warn");
+      } else if (lvl !== "auto" && !levels.includes(lvl)) {
+        // "No data here" and "some data, but too little" are different
+        // situations: one is a property of the world, the other is a
+        // threshold call. Reporting 0.0% for the first reads like a broken
+        // import.
+        const pct = metric.coverage_pct[lvl] ?? 0;
+        hint.textContent =
+          pct === 0
+            ? `not measured at ${lvl} level — available at: ${levels.join(", ")}`
+            : `only ${pct.toFixed(1)}% of ${lvl}s have this — available at: ${levels.join(", ")}`;
+        hint.classList.add("warn");
+      } else {
+        hint.textContent = `available at: ${levels.join(", ")}`;
+        hint.classList.remove("warn");
+      }
+    }
+
+    levelHint.textContent =
+      lvl === "auto"
+        ? `the most detailed level where every metric clears ${threshold}% coverage`
+        : `metrics below ${threshold}% coverage at this level are refused, not silently dropped`;
+  }
+
+  function buildFilter() {
+    const conditionList = [];
+    for (const row of conditions.querySelectorAll(".condition")) {
+      const raw = row.querySelector(".value").value;
+      if (raw === "") continue;
+      conditionList.push({
+        metric: row.querySelector(".metric").value,
+        op: row.querySelector(".op").value,
+        value: Number(raw),
+      });
+    }
+    const filter = {
+      level: level.value,
+      conditions: conditionList,
+      order: order.value,
+      top_n: Number(topN.value),
+    };
+    const sortByValue = sortBy.value;
+    if (sortByValue) filter.sort_by = sortByValue;
+    return filter;
+  }
+
+  // A parsed filter is shown in the same form the user would have filled in
+  // by hand, so a misparse is visible and editable before anything runs.
+  // This is also why /parse and /query are separate calls.
+  function applyFilter(filter) {
+    level.value = filter.level ?? "auto";
+    order.value = filter.order ?? "desc";
+    topN.value = filter.top_n ?? 10;
+    sortBy.value = filter.sort_by ?? "";
+
+    conditions.innerHTML = "";
+    for (const condition of filter.conditions ?? []) {
+      addCondition(condition.metric);
+      const row = conditions.lastElementChild;
+      row.querySelector(".op").value = condition.op;
+      row.querySelector(".value").value = condition.value;
+    }
+    if (!filter.conditions?.length) addCondition();
+    updateHints();
+  }
+
+  function populateSelectors() {
+    level.innerHTML = "";
+    level.appendChild(new Option("Auto (pick the most detailed level with data)", "auto"));
+    for (const entry of metadata.levels) {
+      level.appendChild(
+        new Option(`${titleCase(entry.name)} (${entry.region_count.toLocaleString()})`, entry.name)
+      );
+    }
+
+    sortBy.innerHTML = "";
+    sortBy.appendChild(new Option("First condition's metric", ""));
+    for (const metric of metadata.metrics) {
+      sortBy.appendChild(new Option(metric.label, metric.name));
+    }
+  }
+
+  level.onchange = updateHints;
+  addConditionBtn.onclick = () => addCondition();
+
+  return { addCondition, updateHints, buildFilter, applyFilter, populateSelectors };
+}
+
+const singlePanel = createPanel({
+  level: $("level"),
+  conditions: $("conditions"),
+  addConditionBtn: $("add-condition"),
+  sortBy: $("sort-by"),
+  order: $("order"),
+  topN: $("top-n"),
+  levelHint: $("level-hint"),
+});
+const comparePanelA = createPanel({
+  level: $("level-a"),
+  conditions: $("conditions-a"),
+  addConditionBtn: $("add-condition-a"),
+  sortBy: $("sort-by-a"),
+  order: $("order-a"),
+  topN: $("top-n-a"),
+  levelHint: $("level-hint-a"),
+});
+const comparePanelB = createPanel({
+  level: $("level-b"),
+  conditions: $("conditions-b"),
+  addConditionBtn: $("add-condition-b"),
+  sortBy: $("sort-by-b"),
+  order: $("order-b"),
+  topN: $("top-n-b"),
+  levelHint: $("level-hint-b"),
+});
+
 async function loadMetadata() {
   const response = await fetch("/metadata");
   if (!response.ok) throw new Error(`/metadata returned ${response.status}`);
   metadata = await response.json();
 
-  const level = $("level");
-  level.innerHTML = "";
-  level.appendChild(new Option("Auto (pick the most detailed level with data)", "auto"));
-  for (const entry of metadata.levels) {
-    level.appendChild(
-      new Option(`${titleCase(entry.name)} (${entry.region_count.toLocaleString()})`, entry.name)
-    );
-  }
-  level.onchange = updateHints;
-
-  const sortBy = $("sort-by");
-  sortBy.innerHTML = "";
-  sortBy.appendChild(new Option("First condition's metric", ""));
-  for (const metric of metadata.metrics) {
-    sortBy.appendChild(new Option(metric.label, metric.name));
+  for (const panel of [singlePanel, comparePanelA, comparePanelB]) {
+    panel.populateSelectors();
   }
 
   // The natural language box only appears when the server has credentials for
   // it — better than offering a button that always fails.
   $("nl-panel").hidden = !metadata.natural_language_enabled;
 
-  addCondition();
-  updateHints();
+  singlePanel.addCondition();
+  singlePanel.updateHints();
+  comparePanelA.addCondition();
+  comparePanelA.updateHints();
+  comparePanelB.addCondition();
+  comparePanelB.updateHints();
 }
 
-// A parsed filter is shown in the same form the user would have filled in by
-// hand, so a misparse is visible and editable before anything runs. This is
-// also why /parse and /query are separate calls.
-function applyFilter(filter) {
-  $("level").value = filter.level ?? "auto";
-  $("order").value = filter.order ?? "desc";
-  $("top-n").value = filter.top_n ?? 10;
-  $("sort-by").value = filter.sort_by ?? "";
-
-  $("conditions").innerHTML = "";
-  for (const condition of filter.conditions ?? []) {
-    addCondition(condition.metric);
-    const row = $("conditions").lastElementChild;
-    row.querySelector(".op").value = condition.op;
-    row.querySelector(".value").value = condition.value;
-  }
-  if (!filter.conditions?.length) addCondition();
-  updateHints();
+// Compare mode swaps which builder(s) and result area are visible; it does
+// not change what a query is or how it runs. Natural language parsing stays
+// tied to the single-query panel - which side of a comparison a parsed
+// filter should land on is ambiguous, so this keeps the ambiguity out
+// entirely rather than guessing.
+function setCompareMode(comparing) {
+  $("nl-panel").hidden = comparing || !metadata?.natural_language_enabled;
+  $("builder").hidden = comparing;
+  $("compare-panel").hidden = !comparing;
+  $("compare-error").hidden = true;
+  $("compare-results").hidden = comparing ? $("compare-results").hidden : true;
+  $("error").hidden = true;
+  $("results-panel").hidden = comparing || !lastResult;
 }
 
 async function parseText() {
@@ -114,7 +283,7 @@ async function parseText() {
       status.classList.add("warn");
       return;
     }
-    applyFilter(body.filter);
+    singlePanel.applyFilter(body.filter);
     $("filter-json").textContent = JSON.stringify(body.filter, null, 2);
     status.textContent = "Filled in below — check it, edit anything, then run.";
   } catch (error) {
@@ -133,112 +302,6 @@ function titleCase(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-function addCondition(metricName) {
-  const id = ++conditionSeq;
-  const row = document.createElement("div");
-  row.className = "condition";
-  row.dataset.id = id;
-
-  const metric = document.createElement("select");
-  metric.className = "metric";
-  for (const entry of metadata.metrics) {
-    metric.appendChild(new Option(entry.label, entry.name));
-  }
-  if (metricName) metric.value = metricName;
-
-  const op = document.createElement("select");
-  op.className = "op";
-  for (const entry of OPERATORS) op.appendChild(new Option(entry.label, entry.value));
-
-  const value = document.createElement("input");
-  value.type = "number";
-  value.className = "value";
-  value.step = "any";
-  value.placeholder = "value";
-
-  const unit = document.createElement("span");
-  unit.className = "unit";
-
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "remove";
-  remove.textContent = "×";
-  remove.title = "Remove this condition";
-  remove.onclick = () => {
-    row.remove();
-    updateHints();
-  };
-
-  const hint = document.createElement("span");
-  hint.className = "hint coverage";
-
-  metric.onchange = updateHints;
-  row.append(metric, op, value, unit, remove, hint);
-  $("conditions").appendChild(row);
-  updateHints();
-}
-
-// Coverage is shown next to every metric so the reason a query will be
-// refused is visible before it is run, rather than only in the error.
-function updateHints() {
-  if (!metadata) return;
-  const threshold = metadata.coverage_threshold_pct;
-  const level = $("level").value;
-
-  for (const row of document.querySelectorAll(".condition")) {
-    const metric = metricByName(row.querySelector(".metric").value);
-    row.querySelector(".unit").textContent = metric?.unit ?? "";
-    const hint = row.querySelector(".coverage");
-    if (!metric) continue;
-
-    const levels = metric.levels_with_data;
-    if (levels.length === 0) {
-      hint.textContent = "no level has enough data for this metric";
-      hint.classList.add("warn");
-    } else if (level !== "auto" && !levels.includes(level)) {
-      // "No data here" and "some data, but too little" are different
-      // situations: one is a property of the world, the other is a threshold
-      // call. Reporting 0.0% for the first reads like a broken import.
-      const pct = metric.coverage_pct[level] ?? 0;
-      hint.textContent =
-        pct === 0
-          ? `not measured at ${level} level — available at: ${levels.join(", ")}`
-          : `only ${pct.toFixed(1)}% of ${level}s have this — available at: ${levels.join(", ")}`;
-      hint.classList.add("warn");
-    } else {
-      hint.textContent = `available at: ${levels.join(", ")}`;
-      hint.classList.remove("warn");
-    }
-  }
-
-  $("level-hint").textContent =
-    level === "auto"
-      ? `the most detailed level where every metric clears ${threshold}% coverage`
-      : `metrics below ${threshold}% coverage at this level are refused, not silently dropped`;
-}
-
-function buildFilter() {
-  const conditions = [];
-  for (const row of document.querySelectorAll(".condition")) {
-    const raw = row.querySelector(".value").value;
-    if (raw === "") continue;
-    conditions.push({
-      metric: row.querySelector(".metric").value,
-      op: row.querySelector(".op").value,
-      value: Number(raw),
-    });
-  }
-  const filter = {
-    level: $("level").value,
-    conditions,
-    order: $("order").value,
-    top_n: Number($("top-n").value),
-  };
-  const sortBy = $("sort-by").value;
-  if (sortBy) filter.sort_by = sortBy;
-  return filter;
-}
-
 function showError(message, detail) {
   $("error-message").textContent = message;
   $("error-detail").textContent = detail ?? "";
@@ -246,13 +309,16 @@ function showError(message, detail) {
   $("results-panel").hidden = true;
 }
 
-function renderResults(body) {
+// Shared by the single-query table and each side of the compare table: same
+// columns, same formatting, same "-" for a metric a region lacks. onRowClick
+// is only wired up in single-query mode, where a row selection also drives
+// the globe; the compare tables are read-only lists with nothing to select.
+function renderTable(body, { head, tbody, onRowClick }) {
   const metrics = [...new Set(body.applied_filter.conditions.map((c) => c.metric))];
   if (body.applied_filter.sort_by && !metrics.includes(body.applied_filter.sort_by)) {
     metrics.push(body.applied_filter.sort_by);
   }
 
-  const head = $("results-head");
   head.innerHTML = "";
   for (const column of ["#", titleCase(body.level), "Within"]) {
     const th = document.createElement("th");
@@ -267,14 +333,13 @@ function renderResults(body) {
     head.appendChild(th);
   }
 
-  const tbody = $("results-body");
   tbody.innerHTML = "";
   body.results.forEach((row, index) => {
     const tr = document.createElement("tr");
     tr.dataset.regionId = row.region_id;
     // Selecting from the table flies the globe to the region; selecting from
     // the globe highlights the row. One selection, two views of it.
-    tr.onclick = () => selectRegion(row.region_id);
+    if (onRowClick) tr.onclick = () => onRowClick(row.region_id);
     for (const text of [index + 1, row.name, row.parent_name ?? "—"]) {
       const td = document.createElement("td");
       td.textContent = text;
@@ -291,11 +356,23 @@ function renderResults(body) {
     }
     tbody.appendChild(tr);
   });
+}
 
+function summarize(body) {
   const noun = body.count === 1 ? body.level : PLURALS[body.level] ?? `${body.level}s`;
-  $("results-summary").textContent =
+  return (
     `${body.count} ${noun} — level chosen ` +
-    `${body.level_chosen_by === "auto" ? "automatically" : "by you"}`;
+    `${body.level_chosen_by === "auto" ? "automatically" : "by you"}`
+  );
+}
+
+function renderResults(body) {
+  renderTable(body, {
+    head: $("results-head"),
+    tbody: $("results-body"),
+    onRowClick: (regionId) => selectRegion(regionId),
+  });
+  $("results-summary").textContent = summarize(body);
   $("results-panel").hidden = false;
   $("error").hidden = true;
 
@@ -453,8 +530,22 @@ function formatNumber(value) {
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
+// Runs one GeoFilter against /query. Used directly by the single-query path
+// and twice (in parallel) by compare mode - two calls to the one execution
+// path, never a second one.
+async function runOne(filter) {
+  const response = await fetch("/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(filter),
+  });
+  const body = await response.json();
+  if (!response.ok) return { ok: false, body };
+  return { ok: true, body };
+}
+
 async function runQuery() {
-  const filter = buildFilter();
+  const filter = singlePanel.buildFilter();
   $("filter-json").textContent = JSON.stringify(filter, null, 2);
 
   if (filter.conditions.length === 0) {
@@ -464,23 +555,17 @@ async function runQuery() {
 
   $("status").textContent = "running…";
   try {
-    const response = await fetch("/query", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(filter),
-    });
-    const body = await response.json();
-
-    if (!response.ok) {
+    const result = await runOne(filter);
+    if (!result.ok) {
       // A refusal names the metric responsible. Surfacing it verbatim is the
       // point: an honest "no" beats an empty table.
-      const detail = body.blocking_metric
-        ? `Blocking metric: ${body.blocking_metric}`
-        : JSON.stringify(body);
-      showError(body.error ?? "The API rejected this query.", detail);
+      const detail = result.body.blocking_metric
+        ? `Blocking metric: ${result.body.blocking_metric}`
+        : JSON.stringify(result.body);
+      showError(result.body.error ?? "The API rejected this query.", detail);
       return;
     }
-    renderResults(body);
+    renderResults(result.body);
   } catch (error) {
     showError("Could not reach the API.", String(error));
   } finally {
@@ -488,9 +573,61 @@ async function runQuery() {
   }
 }
 
-$("add-condition").onclick = () => addCondition();
+function showCompareError(message) {
+  $("compare-error-message").textContent = message;
+  $("compare-error").hidden = false;
+  $("compare-results").hidden = true;
+}
+
+// One rejected side names itself rather than falling back to a partial or
+// empty comparison - the same "fail loudly" rule as the single-query path,
+// applied per side instead of once.
+function describeRejection(label, body) {
+  const detail = body.blocking_metric ? ` (blocking metric: ${body.blocking_metric})` : "";
+  return `${label}: ${body.error ?? "the API rejected this query"}${detail}`;
+}
+
+async function runCompare() {
+  const filterA = comparePanelA.buildFilter();
+  const filterB = comparePanelB.buildFilter();
+  $("filter-json").textContent = JSON.stringify({ a: filterA, b: filterB }, null, 2);
+  $("compare-status").textContent = "";
+
+  if (filterA.conditions.length === 0 || filterB.conditions.length === 0) {
+    showCompareError("Add at least one condition with a value to both Query A and Query B.");
+    return;
+  }
+
+  $("compare-status").textContent = "running…";
+  $("compare-error").hidden = true;
+  try {
+    const [resultA, resultB] = await Promise.all([runOne(filterA), runOne(filterB)]);
+    if (!resultA.ok) {
+      showCompareError(describeRejection("Query A", resultA.body));
+      return;
+    }
+    if (!resultB.ok) {
+      showCompareError(describeRejection("Query B", resultB.body));
+      return;
+    }
+
+    renderTable(resultA.body, { head: $("compare-head-a"), tbody: $("compare-body-a") });
+    $("compare-summary-a").textContent = `Query A — ${summarize(resultA.body)}`;
+    renderTable(resultB.body, { head: $("compare-head-b"), tbody: $("compare-body-b") });
+    $("compare-summary-b").textContent = `Query B — ${summarize(resultB.body)}`;
+
+    $("compare-results").hidden = false;
+    $("compare-error").hidden = true;
+  } catch (error) {
+    showCompareError(`Could not reach the API. ${error}`);
+  } finally {
+    $("compare-status").textContent = "";
+  }
+}
+
 $("run").onclick = runQuery;
-$("level").onchange = updateHints;
+$("run-compare").onclick = runCompare;
+$("compare-toggle").onchange = (event) => setCompareMode(event.target.checked);
 $("parse").onclick = parseText;
 $("nl-text").addEventListener("keydown", (event) => {
   // Enter parses; Shift+Enter is a newline.

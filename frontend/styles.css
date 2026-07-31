@@ -79,6 +79,16 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
 .tagline { margin: 0.25rem 0 1.75rem; color: var(--muted); }
 
+.compare-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: -1.25rem 0 1.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
 section, fieldset, details {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -172,6 +182,28 @@ button:hover { filter: brightness(1.08); }
 #results-panel { padding: 1.25rem; }
 .table-scroll { overflow-x: auto; }
 
+/* Compare mode: two builders, then two result tables, side by side.
+   auto-fit + minmax reflows to one column on a narrow viewport without a
+   separate breakpoint. */
+.compare-grid[hidden] { display: none; }
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1.25rem;
+}
+.compare-column {
+  min-width: 0; /* let the table scroll instead of forcing the grid track wide */
+}
+/* #compare-results is itself a <section>, which would otherwise double up
+   the panel background/border already drawn by each .compare-column card. */
+#compare-results { background: none; border: none; }
+#compare-results .compare-column {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
 .map {
   position: relative;
   margin-bottom: 1.25rem;
@@ -250,14 +282,18 @@ button:hover { filter: brightness(1.08); }
 
 .map-help { position: absolute; left: 0.75rem; top: 0.6rem; margin: 0; }
 
-tbody tr { cursor: pointer; }
-tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+/* Only the single-query table drives the globe from a row click. The compare
+   tables have no click handler, so they must not borrow this table's pointer
+   cursor and hover highlight - that affordance would promise a click does
+   something. */
+#results tbody tr { cursor: pointer; }
+#results tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+#results tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
 td.numeric, th.numeric { text-align: right; }
-tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 
 details { margin-top: 1.25rem; padding: 0.75rem 1.25rem; }
 summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
