@@ -12,6 +12,9 @@ from collections.abc import Sequence
 from typing import Any, TypedDict
 
 import psycopg
+import shapely
+
+from atlasql import db
 
 log = logging.getLogger(__name__)
 
@@ -84,3 +87,38 @@ def existing_ids(conn: psycopg.Connection, source: str) -> dict[str, int]:
             "SELECT source_id, id FROM regions WHERE source = %s", (source,)
         )
         return {row["source_id"]: row["id"] for row in cur.fetchall()}
+
+
+def geometries_for(level: str) -> list[dict]:
+    """Region polygons at one level, as GeoJSON-ish dicts for rasterstats.
+
+    The bounding box travels with each region so a raster job can decide which
+    regions a tile or window touches without unpacking the geometry again.
+    """
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, ST_AsBinary(geom) AS wkb, ST_XMin(geom) AS xmin,
+                   ST_YMin(geom) AS ymin, ST_XMax(geom) AS xmax, ST_YMax(geom) AS ymax
+            FROM regions
+            WHERE level = %s AND geom IS NOT NULL
+            ORDER BY id
+            """,
+            (level,),
+        ).fetchall()
+    return [dict(row, geometry=shapely.from_wkb(bytes(row["wkb"]))) for row in rows]
+
+
+def points_for(level: str) -> list[dict]:
+    """Region locations for a point tier, which has centroids but no polygons."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, ST_X(centroid) AS x, ST_Y(centroid) AS y
+            FROM regions
+            WHERE level = %s AND geom IS NULL AND centroid IS NOT NULL
+            ORDER BY id
+            """,
+            (level,),
+        ).fetchall()
+    return [dict(row) for row in rows]

@@ -26,12 +26,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import rasterio
-import shapely
 from rasterstats import zonal_stats
 
 from atlasql import db
 from atlasql.etl import availability, download
 from atlasql.etl.metrics import MetricRow, upsert_metrics
+from atlasql.etl.regions import geometries_for, points_for
 
 log = logging.getLogger(__name__)
 
@@ -105,37 +105,6 @@ def register_metrics(conn) -> None:
         )
 
 
-def _regions_for(level: str) -> list[dict]:
-    """Region geometries at one level, as GeoJSON-ish dicts for rasterstats."""
-    with db.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, name, ST_AsBinary(geom) AS wkb, ST_XMin(geom) AS xmin,
-                   ST_YMin(geom) AS ymin, ST_XMax(geom) AS xmax, ST_YMax(geom) AS ymax
-            FROM regions
-            WHERE level = %s AND geom IS NOT NULL
-            ORDER BY id
-            """,
-            (level,),
-        ).fetchall()
-    return [dict(row, geometry=shapely.from_wkb(bytes(row["wkb"]))) for row in rows]
-
-
-def _points_for(level: str) -> list[dict]:
-    """Region locations for a point tier, which has centroids but no polygons."""
-    with db.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, name, ST_X(centroid) AS x, ST_Y(centroid) AS y
-            FROM regions
-            WHERE level = %s AND geom IS NULL AND centroid IS NOT NULL
-            ORDER BY id
-            """,
-            (level,),
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
 def _overlaps(region: dict, tile: Tile) -> bool:
     west, south, east, north = tile.bounds
     return not (
@@ -155,14 +124,14 @@ def import_elevation(level: str = "country", allow_missing_tiles: bool = False) 
     quietly changes its mind. Tiles are cached, so re-running after a transient
     failure only refetches what is actually missing.
     """
-    points = _points_for(level)
+    points = points_for(level)
     if points:
         # A point tier has no area to average over, so the only honest statistic
         # is the value at the location itself.
         import_point_elevation(level, allow_missing_tiles=allow_missing_tiles)
         return
 
-    regions = _regions_for(level)
+    regions = geometries_for(level)
     if not regions:
         raise RuntimeError(f"no regions with geometry or centroids at level {level!r}")
     log.info("computing zonal elevation for %d %s regions", len(regions), level)
@@ -282,7 +251,7 @@ def import_point_elevation(level: str, allow_missing_tiles: bool = False) -> Non
     Cities whose location has no DEM cell - small islands generalised away at
     1 km - get no elevation rather than a value borrowed from another dataset.
     """
-    points = _points_for(level)
+    points = points_for(level)
     if not points:
         raise RuntimeError(f"no regions with a centroid at level {level!r}")
     log.info("sampling elevation at %d %s locations", len(points), level)
