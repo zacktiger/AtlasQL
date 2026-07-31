@@ -29,6 +29,7 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m atlasql.cli import-states
 .venv/Scripts/python -m atlasql.cli import-cities
 .venv/Scripts/python -m atlasql.cli import-world-bank
+.venv/Scripts/python -m atlasql.cli import-gridded-gdp --level state
 .venv/Scripts/python -m atlasql.cli import-elevation --level country
 .venv/Scripts/python -m atlasql.cli import-rivers --level state
 .venv/Scripts/python -m pytest                # DB tests skip if it is not up
@@ -140,6 +141,17 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
 - **River counting**: HydroRIVERS stores rivers as many segments. Group by main-stem ID before counting or one river counts as dozens.
 - **Elevation**: expose mean, min, and max as three separate metrics rather than picking one canonical "elevation".
 - **Cities** are point data (GeoNames), not polygons, so raster zonal statistics and polygon intersection do not apply the same way as for the polygon tiers.
+- **Ratio metrics cannot be zonal-averaged.** GDP per capita is output over
+  people, so aggregating it needs `sum(GDP) / sum(population)`, not the mean of
+  the per-capita cells — an area-weighted mean lets empty land outvote the
+  cities and read New York State at 79.6k against a real 112k. Any future
+  metric of the form "x per y" has the same trap; elevation does not, which is
+  why the elevation job's plain cell mean is fine.
+- **Two GDP metrics exist and must stay separate.** `gdp_per_capita` (World
+  Bank, current US$, country only) and `gdp_per_capita_ppp` (Kummu gridded,
+  2021 int$, all tiers). Merging them under one name would put one unit on a
+  registry entry that is wrong at half the levels, and make a numeric threshold
+  mean different things at different levels.
 - **Ring winding order for the globe**: d3-geo takes the *clockwise* side of an exterior ring as the interior, the opposite of RFC 7946. `atlasql/geometry.py` therefore emits `ST_ForcePolygonCW`. On a plane a ring has an inside; on a sphere it only separates two regions, so getting this backwards renders a country as the entire planet minus that country — which reads as a projection bug, not as bad data.
 
 ## Build order

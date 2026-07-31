@@ -28,6 +28,9 @@ python -m atlasql.cli import-natural-earth   # continents + countries
 python -m atlasql.cli import-states          # states/provinces under countries
 python -m atlasql.cli import-cities          # GeoNames cities + population
 python -m atlasql.cli import-world-bank      # GDP per capita and population
+python -m atlasql.cli import-gridded-gdp --level country   # GDP per capita (PPP)
+python -m atlasql.cli import-gridded-gdp --level state
+python -m atlasql.cli import-gridded-gdp --level city
 python -m atlasql.cli import-elevation --level city
 python -m atlasql.cli import-elevation --level country
 python -m atlasql.cli import-elevation --level state
@@ -129,21 +132,33 @@ is the intended answer, not an empty result set.
 | Tier | Regions | Metrics |
 |---|---|---|
 | Continent | 7 | none yet |
-| Country | 258 | GDP per capita, population, elevation (mean/min/max), river length, major rivers |
-| State | 4,596 | elevation (mean/min/max), river length, major rivers |
-| City | 34,021 | population, elevation (mean) |
+| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), river length, major rivers |
+| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), river length, major rivers |
+| City | 34,021 | GDP per capita (PPP), population, elevation (mean) |
 
 The gaps are the interesting part, and each one is a named refusal rather than
 an empty table:
 
-- **GDP per capita** exists at country level and nowhere below it, because no
-  reliable global subnational source does.
+- **Two GDP metrics, deliberately not merged.** `gdp_per_capita` is the World
+  Bank's national figure in current US dollars and exists at country level
+  only, because the Bank reports nothing below it. `gdp_per_capita_ppp` is the
+  Kummu downscaled dataset in 2021 international dollars and reaches every
+  tier. They are different units, so one name covering both would make
+  `> 40000` mean two different things depending on which level auto-detection
+  picked. Asking for the World Bank metric below the country tier is still a
+  named refusal.
+- **Subnational GDP is downscaled, not reported.** Genuinely subnational
+  accounts exist for 89 countries; elsewhere the grid has no subnational signal
+  and a country's states differ only by how population is spread. Coverage
+  percentage cannot express that, so it is in the metric description that
+  `/metadata` serves.
 - **River metrics** stop at the state tier. Cities are points; a point contains
   no rivers.
 - **Elevation minimum and maximum** stop at the state tier too. A point has no
   range, so cities carry only `elevation_mean`, sampled at their location.
 - **Population** spans city and country but not state, so a query combining it
-  with GDP resolves to country while population alone reaches cities.
+  with the World Bank GDP figure resolves to country while population alone
+  reaches cities.
 
 ## Tests
 

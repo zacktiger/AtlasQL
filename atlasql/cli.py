@@ -4,6 +4,7 @@
     python -m atlasql.cli import-natural-earth
     python -m atlasql.cli import-states
     python -m atlasql.cli import-world-bank
+    python -m atlasql.cli import-gridded-gdp --level state
     python -m atlasql.cli import-elevation --level state
     python -m atlasql.cli refresh-availability
 
@@ -48,6 +49,12 @@ def _import_world_bank(_: argparse.Namespace) -> None:
     world_bank.import_indicators()
 
 
+def _import_gridded_gdp(args: argparse.Namespace) -> None:
+    from atlasql.etl import gridded_gdp
+
+    gridded_gdp.import_gridded_gdp(level=args.level)
+
+
 def _import_elevation(args: argparse.Namespace) -> None:
     from atlasql.etl import elevation
 
@@ -88,6 +95,11 @@ COMMANDS = {
         _import_world_bank,
         "Import World Bank indicators (GDP per capita, population) onto countries",
         False,
+    ),
+    "import-gridded-gdp": (
+        _import_gridded_gdp,
+        "Aggregate GDP per capita (PPP) from the Kummu grid for one level",
+        True,
     ),
     "import-elevation": (
         _import_elevation,
