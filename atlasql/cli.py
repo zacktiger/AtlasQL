@@ -36,10 +36,16 @@ def _import_states(_: argparse.Namespace) -> None:
     natural_earth.import_states()
 
 
+def _import_cities(_: argparse.Namespace) -> None:
+    from atlasql.etl import geonames
+
+    geonames.import_cities()
+
+
 def _import_world_bank(_: argparse.Namespace) -> None:
     from atlasql.etl import world_bank
 
-    world_bank.import_gdp_per_capita()
+    world_bank.import_indicators()
 
 
 def _import_elevation(args: argparse.Namespace) -> None:
@@ -73,9 +79,14 @@ COMMANDS = {
         "Import Natural Earth states and provinces under their countries",
         False,
     ),
+    "import-cities": (
+        _import_cities,
+        "Import GeoNames cities with population, parented spatially",
+        False,
+    ),
     "import-world-bank": (
         _import_world_bank,
-        "Import World Bank GDP per capita onto countries",
+        "Import World Bank indicators (GDP per capita, population) onto countries",
         False,
     ),
     "import-elevation": (
@@ -108,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
             subparser.add_argument(
                 "--level",
                 default="country",
+                # Every level that holds regions with data of its own. Continents
+                # are dissolved from countries and carry no metrics.
                 choices=[level for level in config.LEVELS if level != "continent"],
                 help="which tier to compute the metric for (default: country)",
             )

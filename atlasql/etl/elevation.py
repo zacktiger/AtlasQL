@@ -25,6 +25,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
+import rasterio
 import shapely
 from rasterstats import zonal_stats
 
@@ -120,6 +121,21 @@ def _regions_for(level: str) -> list[dict]:
     return [dict(row, geometry=shapely.from_wkb(bytes(row["wkb"]))) for row in rows]
 
 
+def _points_for(level: str) -> list[dict]:
+    """Region locations for a point tier, which has centroids but no polygons."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, ST_X(centroid) AS x, ST_Y(centroid) AS y
+            FROM regions
+            WHERE level = %s AND geom IS NULL AND centroid IS NOT NULL
+            ORDER BY id
+            """,
+            (level,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _overlaps(region: dict, tile: Tile) -> bool:
     west, south, east, north = tile.bounds
     return not (
@@ -139,10 +155,17 @@ def import_elevation(level: str = "country", allow_missing_tiles: bool = False) 
     quietly changes its mind. Tiles are cached, so re-running after a transient
     failure only refetches what is actually missing.
     """
+    points = _points_for(level)
+    if points:
+        # A point tier has no area to average over, so the only honest statistic
+        # is the value at the location itself.
+        import_point_elevation(level, allow_missing_tiles=allow_missing_tiles)
+        return
+
     regions = _regions_for(level)
     if not regions:
-        raise RuntimeError(f"no regions with geometry at level {level!r}")
-    log.info("computing elevation for %d %s regions", len(regions), level)
+        raise RuntimeError(f"no regions with geometry or centroids at level {level!r}")
+    log.info("computing zonal elevation for %d %s regions", len(regions), level)
 
     all_tiles = [Tile(lat, lon) for lat in TILE_LAT_ORIGINS for lon in TILE_LON_ORIGINS]
     # Open ocean tiles touch no land region and are never downloaded.
@@ -245,6 +268,90 @@ def import_elevation(level: str = "country", allow_missing_tiles: bool = False) 
         len(regions),
         level,
         100 * covered_regions / len(regions),
+    )
+
+
+def import_point_elevation(level: str, allow_missing_tiles: bool = False) -> None:
+    """Sample the DEM at each region's location, for tiers that are points.
+
+    Only `elevation_mean` is written. A point has no range, so a minimum and a
+    maximum would be the same number three times over, dressed up as three
+    facts; leaving them absent means asking for a city's elevation range is
+    refused by name, which is the truthful answer.
+
+    Cities whose location has no DEM cell - small islands generalised away at
+    1 km - get no elevation rather than a value borrowed from another dataset.
+    """
+    points = _points_for(level)
+    if not points:
+        raise RuntimeError(f"no regions with a centroid at level {level!r}")
+    log.info("sampling elevation at %d %s locations", len(points), level)
+
+    all_tiles = [Tile(lat, lon) for lat in TILE_LAT_ORIGINS for lon in TILE_LON_ORIGINS]
+    by_tile: dict[str, list[dict]] = defaultdict(list)
+    for point in points:
+        for tile in all_tiles:
+            west, south, east, north = tile.bounds
+            if west <= point["x"] <= east and south <= point["y"] <= north:
+                by_tile[tile.name].append(point)
+                break
+
+    tiles = [t for t in all_tiles if by_tile[t.name]]
+    log.info("%d of %d GMTED tiles contain a location", len(tiles), len(all_tiles))
+    paths = download.fetch_many([(t.url, t.filename) for t in tiles])
+
+    unavailable = [t.name for t in tiles if t.filename not in paths]
+    if unavailable and not allow_missing_tiles:
+        raise RuntimeError(
+            f"{len(unavailable)} DEM tiles could not be fetched: "
+            f"{', '.join(unavailable)}. Re-run to retry just these (downloads "
+            "are cached), or pass allow_missing_tiles to accept the gap."
+        )
+
+    rows: list[MetricRow] = []
+    for index, tile in enumerate(tiles, start=1):
+        path = paths.get(tile.filename)
+        if path is None:
+            log.warning("tile %s unavailable, skipping", tile.name)
+            continue  # only reachable with allow_missing_tiles
+        members = by_tile[tile.name]
+        with rasterio.open(path) as raster:
+            nodata = raster.nodata
+            samples = list(raster.sample([(p["x"], p["y"]) for p in members]))
+        hits = 0
+        for point, sample in zip(members, samples, strict=True):
+            value = float(sample[0])
+            if nodata is not None and value == nodata:
+                continue
+            hits += 1
+            rows.append(
+                {
+                    "region_id": point["id"],
+                    "metric_name": "elevation_mean",
+                    "value": value,
+                    "year": VINTAGE_YEAR,
+                }
+            )
+        log.info(
+            "tile %s (%d/%d): %d of %d locations had data",
+            tile.name,
+            index,
+            len(tiles),
+            hits,
+            len(members),
+        )
+
+    with db.connect() as conn:
+        register_metrics(conn)
+        upsert_metrics(conn, rows)
+        availability.refresh(conn)
+
+    log.info(
+        "elevation: %d of %d %s regions covered (%.0f%%)",
+        len(rows),
+        len(points),
+        level,
+        100 * len(rows) / len(points),
     )
 
 

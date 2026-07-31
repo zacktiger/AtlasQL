@@ -16,13 +16,14 @@ import psycopg
 log = logging.getLogger(__name__)
 
 
-class RegionRow(TypedDict):
+class RegionRow(TypedDict, total=False):
     name: str
     level: str
     parent_id: int | None
     source: str
     source_id: str
     wkb: bytes | None  # polygon geometry; None for point-only tiers
+    point_wkb: bytes | None  # point tiers (cities) supply their location here
 
 
 # ST_MakeValid can hand back a GeometryCollection when it repairs a self
@@ -34,12 +35,22 @@ _GEOM_SQL = """
     END
 """
 
+# Polygon tiers derive their centroid from the polygon. Point tiers have no
+# polygon to derive it from, so they supply the point directly.
+_CENTROID_SQL = f"""
+    CASE
+        WHEN %(point_wkb)s::bytea IS NOT NULL THEN ST_GeomFromWKB(%(point_wkb)s::bytea, 4326)
+        WHEN %(wkb)s::bytea IS NULL THEN NULL
+        ELSE ST_Centroid({_GEOM_SQL})
+    END
+"""
+
 _UPSERT_SQL = f"""
 INSERT INTO regions (name, level, parent_id, source, source_id, geom, centroid)
 VALUES (
     %(name)s, %(level)s, %(parent_id)s, %(source)s, %(source_id)s,
     {_GEOM_SQL},
-    CASE WHEN %(wkb)s::bytea IS NULL THEN NULL ELSE ST_Centroid({_GEOM_SQL}) END
+    {_CENTROID_SQL}
 )
 ON CONFLICT (source, source_id) DO UPDATE SET
     name      = EXCLUDED.name,
@@ -56,7 +67,8 @@ def upsert_regions(conn: psycopg.Connection, rows: Sequence[RegionRow]) -> dict[
     ids: dict[str, int] = {}
     with conn.cursor() as cur:
         for row in rows:
-            params: dict[str, Any] = dict(row)
+            # Both geometry slots are always bound; a tier supplies one of them.
+            params: dict[str, Any] = {"wkb": None, "point_wkb": None, **row}
             cur.execute(_UPSERT_SQL, params)
             result = cur.fetchone()
             assert result is not None  # RETURNING on an upsert always yields a row

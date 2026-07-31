@@ -138,9 +138,20 @@ def test_gdp_at_state_level_is_refused_by_name(states_with_metrics):
 def test_auto_prefers_the_more_granular_tier_when_both_have_coverage(
     states_with_metrics,
 ):
-    """State is more granular than country, so auto should land there."""
+    """Auto lands on the deepest level that can answer every metric.
+
+    River length exists at state and country level but not for cities, which
+    are points and contain no rivers, so this pair bottoms out at state even
+    though elevation alone would now reach the city tier.
+    """
     result = query.run(
-        GeoFilter(conditions=[Condition(metric=ELEVATION, op=">", value=2000)], top_n=5),
+        GeoFilter(
+            conditions=[
+                Condition(metric=ELEVATION, op=">", value=2000),
+                Condition(metric=RIVERS, op=">", value=1000),
+            ],
+            top_n=5,
+        ),
         states_with_metrics,
     )
     assert result.level == "state"
