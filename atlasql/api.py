@@ -8,14 +8,17 @@ a code change or a frontend deploy.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from atlasql import config, db, parser, query
+from atlasql import config, db, geometry, parser, query
 from atlasql.models import GeoFilter, QueryResult
 
 log = logging.getLogger(__name__)
@@ -25,6 +28,10 @@ app = FastAPI(
     description="A query engine over the world's administrative hierarchy.",
     version="0.1.0",
 )
+
+# GeoJSON is repetitive text and compresses about four to one. Without this the
+# world basemap is a multi-hundred-kilobyte download on every page load.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 class MetricInfo(BaseModel):
@@ -120,6 +127,69 @@ def metadata() -> Metadata:
 @app.post("/query", response_model=QueryResult)
 def run_query(geo_filter: GeoFilter) -> QueryResult:
     return query.run(geo_filter)
+
+
+def _parse_ids(ids: str) -> list[int]:
+    parts = [part for part in ids.split(",") if part.strip()]
+    if len(parts) > geometry.MAX_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"at most {geometry.MAX_IDS} region ids per request",
+        )
+    try:
+        return [int(part) for part in parts]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="ids must be integers") from None
+
+
+@app.get("/geometry")
+def region_geometry(
+    ids: str = Query(description="Comma-separated region ids, as returned by /query."),
+    tolerance: float = Query(
+        default=0.05,
+        description="Simplification tolerance in degrees. 0 is full resolution.",
+    ),
+) -> JSONResponse:
+    """GeoJSON for regions /query already returned.
+
+    Split from /query on purpose: the same result set is drawn at whatever
+    detail the current zoom justifies, and asking for more detail must not mean
+    re-running the query.
+    """
+    with db.connect() as conn:
+        collection = geometry.for_regions(conn, _parse_ids(ids), tolerance)
+    return JSONResponse(collection)
+
+
+@app.get("/geometry/basemap")
+def basemap_geometry(
+    request: Request,
+    level: str = Query(default="country"),
+    tolerance: float = Query(default=0.25),
+) -> Response:
+    """Coarse outlines for the whole world at one level: the map's context.
+
+    Drawn from our own regions table rather than a tile service, so the
+    coastlines on screen are the same boundaries the query ran against.
+
+    This is a few hundred kilobytes and worth not re-sending, but it is cached
+    by revalidation rather than by expiry. A freshness lifetime would let a
+    browser keep serving outlines an ETL reimport has already replaced, and a
+    map disagreeing with the table beside it is exactly the kind of silent
+    wrongness this codebase avoids elsewhere. An ETag costs one round trip and
+    makes the repeat case a 304.
+    """
+    if level not in config.LEVELS:
+        raise HTTPException(status_code=422, detail=f"unknown level: {level}")
+    with db.connect() as conn:
+        collection = geometry.basemap(conn, level, tolerance)
+
+    payload = json.dumps(collection, separators=(",", ":"))
+    etag = f'"{hashlib.sha256(payload.encode()).hexdigest()[:32]}"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(payload, media_type="application/json", headers=headers)
 
 
 @app.post("/parse", response_model=ParseResult)
