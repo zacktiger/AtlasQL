@@ -44,6 +44,23 @@ section, fieldset, details {
   border-radius: 10px;
 }
 
+.nl { padding: 1.25rem; margin-bottom: 1.25rem; }
+.nl label { display: block; margin-bottom: 0.5rem; }
+.nl-row { display: flex; gap: 0.6rem; align-items: flex-start; }
+.nl-row textarea {
+  flex: 1;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0.5rem 0.6rem;
+  resize: vertical;
+}
+.nl-row textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nl .hint { display: block; margin: 0.55rem 0 0; }
+button:disabled { opacity: 0.6; cursor: default; }
+
 .builder { padding: 1.25rem; margin-bottom: 1.25rem; }
 
 fieldset { margin: 1rem 0; padding: 1rem; }

@@ -51,8 +51,65 @@ async function loadMetadata() {
     sortBy.appendChild(new Option(metric.label, metric.name));
   }
 
+  // The natural language box only appears when the server has credentials for
+  // it — better than offering a button that always fails.
+  $("nl-panel").hidden = !metadata.natural_language_enabled;
+
   addCondition();
   updateHints();
+}
+
+// A parsed filter is shown in the same form the user would have filled in by
+// hand, so a misparse is visible and editable before anything runs. This is
+// also why /parse and /query are separate calls.
+function applyFilter(filter) {
+  $("level").value = filter.level ?? "auto";
+  $("order").value = filter.order ?? "desc";
+  $("top-n").value = filter.top_n ?? 10;
+  $("sort-by").value = filter.sort_by ?? "";
+
+  $("conditions").innerHTML = "";
+  for (const condition of filter.conditions ?? []) {
+    addCondition(condition.metric);
+    const row = $("conditions").lastElementChild;
+    row.querySelector(".op").value = condition.op;
+    row.querySelector(".value").value = condition.value;
+  }
+  if (!filter.conditions?.length) addCondition();
+  updateHints();
+}
+
+async function parseText() {
+  const text = $("nl-text").value.trim();
+  if (!text) return;
+
+  const status = $("nl-status");
+  const button = $("parse");
+  status.textContent = "parsing…";
+  status.classList.remove("warn");
+  button.disabled = true;
+
+  try {
+    const response = await fetch("/parse", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      status.textContent = body.detail ?? "Could not parse that question.";
+      status.classList.add("warn");
+      return;
+    }
+    applyFilter(body.filter);
+    $("filter-json").textContent = JSON.stringify(body.filter, null, 2);
+    status.textContent = "Filled in below — check it, edit anything, then run.";
+  } catch (error) {
+    status.textContent = `Could not reach the parser. ${error}`;
+    status.classList.add("warn");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function metricByName(name) {
@@ -270,5 +327,13 @@ async function runQuery() {
 $("add-condition").onclick = () => addCondition();
 $("run").onclick = runQuery;
 $("level").onchange = updateHints;
+$("parse").onclick = parseText;
+$("nl-text").addEventListener("keydown", (event) => {
+  // Enter parses; Shift+Enter is a newline.
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    parseText();
+  }
+});
 
 loadMetadata().catch((error) => showError("Could not load /metadata.", String(error)));

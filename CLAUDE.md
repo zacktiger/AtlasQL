@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 1 to 3 are done — country, state and city tiers, all answered by one
-unmodified query engine — and the structured frontend is built. Next per the
-plan's build order: `/parse` with Claude tool use, then wiring natural language
-into the existing form. Two design documents govern the work; read both before
-writing anything:
+Phases 1 to 4 are done — country, state and city tiers answered by one
+unmodified query engine, a structured frontend, and `/parse` turning natural
+language into a `GeoFilter` that pre-fills that same form. What remains from
+the plan's build order is phase 5, frontend polish. Two design documents govern
+the work; read both before writing anything:
 
 - `high-level-vision.md` — the product vision and long-term direction. Read it when deciding *whether* a design is right.
 - `geo-query-engine-plan.md` — the concrete v1 architecture, schema, data sources, and build order. Read it before starting each phase for the *how*.
@@ -45,6 +45,10 @@ Override the connection with `ATLASQL_DATABASE_URL` (see `.env.example`).
 
 Downloaded source archives are cached in `data/` (gitignored); deleting it only
 costs a re-download.
+
+`/parse` needs `ANTHROPIC_API_KEY`; without it the natural language box is
+hidden and everything else works. Its tests run against a stubbed client, so
+the suite needs no key — the one live test skips without it.
 
 ## Git workflow
 

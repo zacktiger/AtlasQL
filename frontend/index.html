@@ -13,6 +13,18 @@
   </header>
 
   <main>
+    <section id="nl-panel" class="nl" aria-label="Ask in plain English" hidden>
+      <label for="nl-text">Ask in plain English</label>
+      <div class="nl-row">
+        <textarea id="nl-text" rows="2"
+          placeholder="cities above 2,000 m with more than 500,000 people"></textarea>
+        <button type="button" id="parse">Parse</button>
+      </div>
+      <p class="hint" id="nl-status">
+        Parsing fills in the form below. Nothing runs until you press Run query.
+      </p>
+    </section>
+
     <section class="builder" aria-label="Query builder">
       <div class="row">
         <label for="level">Level</label>

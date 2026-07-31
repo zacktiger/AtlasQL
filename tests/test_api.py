@@ -80,6 +80,10 @@ def test_frontend_is_served_without_shadowing_the_api(client):
     # The static mount sits at the root, so this guards against it swallowing
     # the API routes.
     assert client.get("/metadata").status_code == 200
+    # Without this, browsers heuristically cache the page and a deploy can
+    # leave a stale index.html running against a fresh app.js.
+    assert page.headers["cache-control"] == "no-cache"
+    assert client.get("/app.js").headers["cache-control"] == "no-cache"
 
 
 def test_malformed_filter_is_rejected_by_the_schema(client):

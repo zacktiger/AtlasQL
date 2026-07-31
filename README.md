@@ -68,6 +68,29 @@ process.
   counts. Generated from the live registry, so adding a metric through an ETL
   job makes it queryable and selectable without a code change.
 - `POST /query` — takes a `GeoFilter`, returns a ranked top-N.
+- `POST /parse` — takes `{"text": "..."}`, returns a `GeoFilter`. **It does not
+  execute anything**: the filter comes back for the user to review and edit in
+  the same form they would have filled in by hand, and running it is a separate
+  `/query` call.
+
+## Natural language
+
+`/parse` needs an Anthropic API key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...      # or: $env:ANTHROPIC_API_KEY on Windows
+```
+
+Without one, everything else works normally and the UI simply doesn't offer the
+natural language box — `/metadata` reports `natural_language_enabled: false`
+rather than presenting a button that always fails.
+
+Claude's only job is to emit a `GeoFilter`. It never sees the database, never
+writes SQL, and never executes anything. The tool schema is generated from the
+live metric registry, so the `metric` field is an enum of names that actually
+exist, and `tool_choice` is forced so the model cannot answer in prose. Whatever
+comes back is re-validated server-side — parsed by the same Pydantic model, then
+checked against the registry — before it is shown to the user.
 
 ```bash
 curl -X POST localhost:8000/query -H 'content-type: application/json' -d '{

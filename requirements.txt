@@ -18,5 +18,9 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pydantic==2.11.7
 
+# Natural language parsing (/parse). Needs ANTHROPIC_API_KEY at runtime; the
+# rest of the app works without it.
+anthropic==0.120.2
+
 # Dev
 pytest==8.4.1
