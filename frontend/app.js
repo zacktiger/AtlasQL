@@ -6,6 +6,8 @@
 // change. The only thing this file knows about the engine is the shape of a
 // GeoFilter, which is the same object the API accepts from any input path.
 
+import { createGlobe } from "./globe.js";
+
 const OPERATORS = [
   { value: ">", label: ">" },
   { value: ">=", label: "≥" },
@@ -24,8 +26,19 @@ const PLURALS = {
   city: "cities",
 };
 
+// Simplification tolerance in degrees, sent to /geometry. The overview is what
+// arrives with a result; the detail version is fetched only once the user has
+// zoomed far enough in for the difference to be visible, because it is roughly
+// five times the payload.
+const OVERVIEW_TOLERANCE = 0.05;
+const DETAIL_TOLERANCE = 0.005;
+const DETAIL_ZOOM_FACTOR = 4;
+
 let metadata = null;
 let conditionSeq = 0;
+let globe = null;
+let lastResult = null;
+let detailRequested = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -258,6 +271,10 @@ function renderResults(body) {
   tbody.innerHTML = "";
   body.results.forEach((row, index) => {
     const tr = document.createElement("tr");
+    tr.dataset.regionId = row.region_id;
+    // Selecting from the table flies the globe to the region; selecting from
+    // the globe highlights the row. One selection, two views of it.
+    tr.onclick = () => selectRegion(row.region_id);
     for (const text of [index + 1, row.name, row.parent_name ?? "—"]) {
       const td = document.createElement("td");
       td.textContent = text;
@@ -281,6 +298,153 @@ function renderResults(body) {
     `${body.level_chosen_by === "auto" ? "automatically" : "by you"}`;
   $("results-panel").hidden = false;
   $("error").hidden = true;
+
+  // After the panel is visible, so the canvas has a size to measure.
+  lastResult = body;
+  showOnMap(body);
+}
+
+// ---------------------------------------------------------------- the map --
+//
+// The globe is a second view of the same result set, not a second query path:
+// it draws region ids /query already returned, and geometry is fetched by id.
+// Nothing here can produce a different answer from the table beside it.
+
+function setUpGlobe() {
+  globe = createGlobe($("globe"), {
+    // Clicking a region on the map should not also move the camera - the user
+    // is already looking at the thing they clicked.
+    onSelect: (regionId) => selectRegion(regionId, { fly: false }),
+    onHover: showTooltip,
+    onCamera: maybeRefineDetail,
+  });
+
+  fetch("/geometry/basemap?level=country&tolerance=0.25")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((collection) => collection && globe.setBasemap(collection))
+    .catch((error) => {
+      // Context outlines are not the answer to anything; results still draw.
+      console.warn("basemap unavailable, drawing results without context", error);
+    });
+
+  $("fit-results").onclick = () => globe.fitResults();
+  $("whole-globe").onclick = () => globe.home();
+}
+
+async function fetchGeometry(ids, tolerance) {
+  try {
+    const response = await fetch(
+      `/geometry?ids=${ids.join(",")}&tolerance=${tolerance}`
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn("geometry unavailable", error);
+    return null;
+  }
+}
+
+// The metric the fill encodes is the one the results are ranked by, so the
+// darkest region is always the top row. Any other choice would put the map and
+// the table in disagreement.
+function colorMetric(filter) {
+  return filter.sort_by || filter.conditions[0]?.metric;
+}
+
+async function showOnMap(body) {
+  detailRequested = false;
+  const metric = colorMetric(body.applied_filter);
+  const values = new Map(
+    body.results.map((row) => [row.region_id, row.metrics[metric]?.value])
+  );
+  updateLegend(metric, values);
+
+  if (!body.results.length) {
+    globe.setResults([], values);
+    return;
+  }
+  const collection = await fetchGeometry(
+    body.results.map((row) => row.region_id),
+    OVERVIEW_TOLERANCE
+  );
+  if (!collection) return;
+  globe.setResults(collection.features, values);
+  // Frames the answer: one country fills the view, a scattered set pulls back
+  // far enough to hold all of it, and either way zooming out reaches the globe.
+  globe.fitResults();
+}
+
+// Zoomed in past the point where the overview outline looks like a polygon
+// rather than a coastline, fetch the same regions at full detail once.
+function maybeRefineDetail(zoomFactor) {
+  if (detailRequested || zoomFactor < DETAIL_ZOOM_FACTOR || !lastResult) return;
+  detailRequested = true;
+  fetchGeometry(
+    lastResult.results.map((row) => row.region_id),
+    DETAIL_TOLERANCE
+  ).then((collection) => collection && globe.refineResults(collection.features));
+}
+
+function updateLegend(metricName, values) {
+  const numbers = [...values.values()].filter(Number.isFinite);
+  const legend = $("map-legend");
+  legend.hidden = numbers.length === 0;
+  if (!numbers.length) return;
+  const metric = metricByName(metricName);
+  $("legend-label").textContent = metric?.label ?? metricName;
+  $("legend-low").textContent = formatNumber(Math.min(...numbers));
+  $("legend-high").textContent = formatNumber(Math.max(...numbers));
+}
+
+function selectRegion(regionId, { fly = true } = {}) {
+  for (const tr of $("results-body").querySelectorAll("tr")) {
+    tr.classList.toggle("selected", Number(tr.dataset.regionId) === regionId);
+  }
+  globe.select(regionId, { fly });
+  if (!fly && regionId != null) {
+    $("results-body")
+      .querySelector(`tr[data-region-id="${regionId}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function showTooltip(feature, position) {
+  const tip = $("globe-tooltip");
+  if (!feature) {
+    tip.hidden = true;
+    return;
+  }
+  const row = lastResult?.results.find(
+    (r) => r.region_id === feature.properties.region_id
+  );
+
+  tip.textContent = "";
+  const name = document.createElement("strong");
+  name.textContent = feature.properties.name;
+  tip.appendChild(name);
+  if (feature.properties.parent_name) {
+    const parent = document.createElement("div");
+    parent.className = "tooltip-metric";
+    parent.textContent = feature.properties.parent_name;
+    tip.appendChild(parent);
+  }
+  for (const [metricName, entry] of Object.entries(row?.metrics ?? {})) {
+    const line = document.createElement("div");
+    line.className = "tooltip-metric";
+    const metric = metricByName(metricName);
+    line.textContent =
+      `${metric?.label ?? metricName}: ${formatNumber(entry.value)}` +
+      `${metric?.unit ? ` ${metric.unit}` : ""}`;
+    tip.appendChild(line);
+  }
+
+  tip.hidden = false;
+  // Flip to the other side of the cursor rather than letting the tooltip run
+  // off the map and get clipped by the panel's overflow.
+  const map = tip.parentElement.getBoundingClientRect();
+  const flip = position.x + tip.offsetWidth + 24 > map.width;
+  tip.style.left = `${flip ? position.x - tip.offsetWidth - 14 : position.x + 14}px`;
+  tip.style.top = `${Math.min(position.y + 14, map.height - tip.offsetHeight - 8)}px`;
 }
 
 function formatNumber(value) {
@@ -336,4 +500,5 @@ $("nl-text").addEventListener("keydown", (event) => {
   }
 });
 
+setUpGlobe();
 loadMetadata().catch((error) => showError("Could not load /metadata.", String(error)));

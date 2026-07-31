@@ -61,13 +61,31 @@ ETL job appears after a reload with no frontend change. Every condition shows
 which levels actually have data for it, and a query that cannot be answered
 shows the API's refusal naming the blocking metric rather than an empty table.
 
+Results are drawn on a globe as well as in the table. The two are one selection
+seen twice: clicking a row turns the globe to that region, clicking a region
+highlights its row. Drag spins, scroll zooms, and zooming out always reaches the
+whole planet — the projection is orthographic at every scale, so a single
+country and the whole world are the same map, not two.
+
+The basemap is our own `regions` table rather than a tile service, so every
+coastline on screen is a boundary some query could have returned. Region fills
+encode the metric the results are ranked by, on a single-hue sequential ramp.
+
 The frontend is static files served by the same app — no build step, no second
-process.
+process. `frontend/vendor/` holds d3-geo and d3-array for the projection and
+its spherical clipping; see the README there for why they are checked in.
 
 - `GET /metadata` — metrics with per-level coverage, and levels with region
   counts. Generated from the live registry, so adding a metric through an ETL
   job makes it queryable and selectable without a code change.
 - `POST /query` — takes a `GeoFilter`, returns a ranked top-N.
+- `GET /geometry?ids=…&tolerance=…` — GeoJSON for regions `/query` returned,
+  simplified to the detail the current zoom justifies. Separate from `/query`
+  so asking for more detail never re-runs the query, and so `GeoFilter` in,
+  `QueryResult` out stays the one contract the engine speaks.
+- `GET /geometry/basemap?level=…` — coarse outlines for the map's context.
+  Revalidated with an ETag rather than given a freshness lifetime: a cached
+  basemap must not outlive an ETL reimport.
 - `POST /parse` — takes `{"text": "..."}`, returns a `GeoFilter`. **It does not
   execute anything**: the filter comes back for the user to review and edit in
   the same form they would have filled in by hand, and running it is a separate

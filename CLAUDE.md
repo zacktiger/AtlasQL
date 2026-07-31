@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Phases 1 to 4 are done — country, state and city tiers answered by one
 unmodified query engine, a structured frontend, and `/parse` turning natural
-language into a `GeoFilter` that pre-fills that same form. What remains from
-the plan's build order is phase 5, frontend polish. Two design documents govern
+language into a `GeoFilter` that pre-fills that same form. Phase 5, frontend
+polish, is under way: results now render on an orthographic globe alongside the
+table, fed by a separate `/geometry` endpoint so the `GeoFilter`/`QueryResult`
+contract is untouched. Two design documents govern
 the work; read both before writing anything:
 
 - `high-level-vision.md` — the product vision and long-term direction. Read it when deciding *whether* a design is right.
@@ -67,8 +69,20 @@ Once the frontend exists, review it in a real browser every few commits rather t
 2. A two-condition query returns a sensible ranked top-N.
 3. A natural language query round-trips: `/parse` → pre-filled editable form → `/query`.
 4. An impossible query (e.g. GDP per capita at city level) surfaces the blocking-metric error, not an empty table.
+5. The globe draws land, ocean and the result regions as three distinct things, and clicking a row turns the globe to it.
 
 Catch regressions here before they stack up behind several commits of new work.
+
+Two lessons from building the globe, both of which cost real time:
+
+- **A screenshot is not enough to check a map.** An inverted polygon fills the
+  whole sphere in a colour that looks plausible. Sample the canvas — if the
+  ocean colour appears in zero pixels, the basemap is inverted, whatever the
+  picture seems to show.
+- **Restart uvicorn and clear the browser cache before believing a fix failed.**
+  `--reload` is not on by default, and a response cached with a freshness
+  lifetime is not re-fetched no matter how many times you reload the page. Both
+  of those masked a fix that was already correct.
 
 ## Maintaining the essence of the product
 
@@ -126,6 +140,7 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
 - **River counting**: HydroRIVERS stores rivers as many segments. Group by main-stem ID before counting or one river counts as dozens.
 - **Elevation**: expose mean, min, and max as three separate metrics rather than picking one canonical "elevation".
 - **Cities** are point data (GeoNames), not polygons, so raster zonal statistics and polygon intersection do not apply the same way as for the polygon tiers.
+- **Ring winding order for the globe**: d3-geo takes the *clockwise* side of an exterior ring as the interior, the opposite of RFC 7946. `atlasql/geometry.py` therefore emits `ST_ForcePolygonCW`. On a plane a ring has an inside; on a sphere it only separates two regions, so getting this backwards renders a country as the entire planet minus that country — which reads as a projection bug, not as bad data.
 
 ## Build order
 

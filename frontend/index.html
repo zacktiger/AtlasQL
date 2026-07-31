@@ -63,6 +63,23 @@
 
     <section id="results-panel" hidden>
       <h2 id="results-summary"></h2>
+
+      <div class="map">
+        <canvas id="globe" aria-label="Results on a globe"></canvas>
+        <div id="globe-tooltip" class="map-tooltip" hidden></div>
+        <div class="map-controls">
+          <button type="button" id="fit-results" class="secondary">Fit results</button>
+          <button type="button" id="whole-globe" class="secondary">Whole globe</button>
+        </div>
+        <div id="map-legend" class="map-legend" hidden>
+          <span id="legend-label"></span>
+          <span id="legend-low" class="legend-end"></span>
+          <span class="legend-ramp"></span>
+          <span id="legend-high" class="legend-end"></span>
+        </div>
+        <p class="hint map-help">Drag to spin, scroll to zoom, click a region to select it.</p>
+      </div>
+
       <div class="table-scroll">
         <table id="results">
           <thead><tr id="results-head"></tr></thead>
@@ -77,6 +94,10 @@
     </details>
   </main>
 
-  <script src="app.js"></script>
+  <!-- Classic scripts, so both are evaluated before the deferred module below
+       and attach to window.d3. d3-array first: d3-geo resolves it from there. -->
+  <script src="vendor/d3-array.v3.min.js"></script>
+  <script src="vendor/d3-geo.v3.min.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

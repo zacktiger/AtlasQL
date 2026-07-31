@@ -7,6 +7,27 @@
   --accent: #2f6f4e;
   --warn: #8a4b1e;
   --warn-bg: #fdf3e8;
+
+  /* Map chrome. Deliberately low-chroma: the only saturated colour on the
+     globe should be the data. */
+  --map-ocean: #e6edf2;
+  --map-land: #cbc8bb;
+  --map-land-line: #a3a093;
+  --map-graticule: rgba(11, 11, 11, 0.07);
+  --map-surface: #ffffff;
+  --map-select: #2f6f4e;
+  --map-ink: #0b0b0b;
+
+  /* Sequential ramp, one hue, light to dark: it encodes magnitude, so the
+     lightest step means "least" and is allowed to recede toward the surface.
+     Never use this for identity - that is what a categorical palette is for. */
+  --ramp-0: #cde2fb;
+  --ramp-1: #9ec5f4;
+  --ramp-2: #6da7ec;
+  --ramp-3: #3987e5;
+  --ramp-4: #256abf;
+  --ramp-5: #184f95;
+  --ramp-6: #0d366b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,6 +40,26 @@
     --accent: #6fbf8f;
     --warn: #e0a66a;
     --warn-bg: #2a211a;
+
+    --map-ocean: #0b1114;
+    --map-land: #3d4549;
+    --map-land-line: #5b6469;
+    --map-graticule: rgba(255, 255, 255, 0.07);
+    --map-surface: #1e2124;
+    --map-select: #6fbf8f;
+    --map-ink: #ffffff;
+
+    /* The ramp's anchor flips rather than the ramp being inverted by filter:
+       "least" must still be the step that recedes into the surface, and on a
+       dark surface that is the dark end. Same hue, same steps, read the other
+       way round. */
+    --ramp-0: #0d366b;
+    --ramp-1: #184f95;
+    --ramp-2: #256abf;
+    --ramp-3: #3987e5;
+    --ramp-4: #6da7ec;
+    --ramp-5: #9ec5f4;
+    --ramp-6: #cde2fb;
   }
 }
 
@@ -130,6 +171,87 @@ button:hover { filter: brightness(1.08); }
 
 #results-panel { padding: 1.25rem; }
 .table-scroll { overflow-x: auto; }
+
+.map {
+  position: relative;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--map-ocean);
+}
+/* Tall enough to be a map rather than a strip, capped so the table below stays
+   on screen on a laptop. */
+#globe {
+  display: block;
+  width: 100%;
+  height: min(58vh, 30rem);
+  touch-action: none;
+  cursor: grab;
+}
+#globe:active { cursor: grabbing; }
+
+.map-controls {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: flex;
+  gap: 0.4rem;
+}
+.map-controls button {
+  background: var(--panel);
+  border-color: var(--line);
+  font-size: 0.82rem;
+  padding: 0.3rem 0.65rem;
+}
+
+.map-legend {
+  position: absolute;
+  left: 0.6rem;
+  bottom: 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.legend-ramp {
+  width: 6rem;
+  height: 0.5rem;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--ramp-0), var(--ramp-1), var(--ramp-2), var(--ramp-3),
+    var(--ramp-4), var(--ramp-5), var(--ramp-6)
+  );
+}
+.legend-end { color: var(--ink); }
+
+.map-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  max-width: 15rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.map-tooltip strong { display: block; }
+.map-tooltip .tooltip-metric { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.map-help { position: absolute; left: 0.75rem; top: 0.6rem; margin: 0; }
+
+tbody tr { cursor: pointer; }
+tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
