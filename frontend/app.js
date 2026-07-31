@@ -126,8 +126,14 @@ function updateHints() {
       hint.textContent = "no level has enough data for this metric";
       hint.classList.add("warn");
     } else if (level !== "auto" && !levels.includes(level)) {
-      const pct = (metric.coverage_pct[level] ?? 0).toFixed(1);
-      hint.textContent = `only ${pct}% coverage at ${level} level — available at: ${levels.join(", ")}`;
+      // "No data here" and "some data, but too little" are different
+      // situations: one is a property of the world, the other is a threshold
+      // call. Reporting 0.0% for the first reads like a broken import.
+      const pct = metric.coverage_pct[level] ?? 0;
+      hint.textContent =
+        pct === 0
+          ? `not measured at ${level} level — available at: ${levels.join(", ")}`
+          : `only ${pct.toFixed(1)}% of ${level}s have this — available at: ${levels.join(", ")}`;
       hint.classList.add("warn");
     } else {
       hint.textContent = `available at: ${levels.join(", ")}`;

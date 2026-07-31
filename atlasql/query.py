@@ -135,13 +135,31 @@ def resolve_level(
         worst = blocking(level)
         if worst is not None:
             metric, pct = worst
+            available = _levels_with_data(coverage, metric, threshold)
+            elsewhere = (
+                f"; it is available at: {', '.join(available)}"
+                if available
+                else "; it is not available at any level"
+            )
+            # A metric that is not measured at this level and one that is
+            # measured too thinly are different answers. Reporting "0.0%
+            # coverage" for the first invites the reader to think the import
+            # broke, when in fact no such data exists at that level.
+            message = (
+                f"{metric} is not measured at {level} level{elsewhere}"
+                if pct == 0
+                else (
+                    f"{metric} covers only {pct:.1f}% of {level}s, below the "
+                    f"{threshold:.0f}% threshold required to query it there{elsewhere}"
+                )
+            )
             raise NoLevelWithCoverageError(
-                f"{metric} has {pct:.1f}% coverage at {level} level, below the "
-                f"{threshold:.0f}% threshold required to query it there",
+                message,
                 blocking_metric=metric,
                 level=level,
                 coverage_pct=pct,
                 threshold_pct=threshold,
+                available_levels=available,
             )
         return level, "explicit"
 
@@ -164,6 +182,14 @@ def resolve_level(
         coverage_by_metric=best_per_metric,
         threshold_pct=threshold,
     )
+
+
+def _levels_with_data(
+    coverage: dict[str, dict[str, float]], metric: str, threshold: float
+) -> list[str]:
+    """The levels where `metric` clears the threshold, most general first."""
+    per_level = coverage.get(metric, {})
+    return [level for level in config.LEVELS if per_level.get(level, 0.0) >= threshold]
 
 
 def _level_has_regions(conn: psycopg.Connection, level: str) -> bool:

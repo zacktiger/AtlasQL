@@ -87,8 +87,43 @@ def test_explicit_level_without_coverage_names_the_blocking_metric(loaded):
         )
     error = excinfo.value
     assert error.blocking_metric == "gdp_per_capita"
-    assert "coverage" in error.message
     assert error.as_dict()["level"] == "continent"
+    # The refusal has to say where the metric *is* usable, or the user is left
+    # guessing which level to retry at.
+    assert "continent" in error.message
+    assert "country" in error.message
+    assert error.as_dict()["available_levels"] == ["country"]
+
+
+def test_a_thin_metric_and_an_absent_one_are_reported_differently(loaded):
+    """0% is a fact about the world; 40% is a threshold call. Say which."""
+    absent = None
+    try:
+        query.run(
+            GeoFilter(
+                level="continent",
+                conditions=[Condition(metric="gdp_per_capita", op=">", value=1)],
+            ),
+            loaded,
+        )
+    except query.NoLevelWithCoverageError as exc:
+        absent = exc
+    assert absent is not None and "not measured" in absent.message
+
+    # The same metric at country level, held to an impossible threshold, is
+    # thin rather than absent and must not claim to be unmeasured.
+    thin = query.resolve_level
+    with pytest.raises(query.NoLevelWithCoverageError) as excinfo:
+        thin(
+            loaded,
+            GeoFilter(
+                level="country",
+                conditions=[Condition(metric="gdp_per_capita", op=">", value=1)],
+            ),
+            threshold=99.0,
+        )
+    assert "not measured" not in excinfo.value.message
+    assert "82.6%" in excinfo.value.message
 
 
 def test_values_are_bound_parameters_not_concatenated(loaded):
