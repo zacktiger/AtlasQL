@@ -14,3 +14,6 @@ venv/
 
 # Playwright MCP screenshots and console dumps from browser review
 .playwright-mcp/
+
+# Scratch worktrees checked out under the repo
+.claude/worktrees/
