@@ -8,7 +8,6 @@ a code change or a frontend deploy.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 
@@ -182,13 +181,13 @@ def basemap_geometry(
     if level not in config.LEVELS:
         raise HTTPException(status_code=422, detail=f"unknown level: {level}")
     with db.connect() as conn:
+        etag = f'"{geometry.basemap_digest(conn, level, tolerance)}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
         collection = geometry.basemap(conn, level, tolerance)
 
     payload = json.dumps(collection, separators=(",", ":"))
-    etag = f'"{hashlib.sha256(payload.encode()).hexdigest()[:32]}"'
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=headers)
     return Response(payload, media_type="application/json", headers=headers)
 
 

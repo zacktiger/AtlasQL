@@ -26,6 +26,7 @@ Two things here are less obvious than they look:
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import psycopg
@@ -47,6 +48,7 @@ _SELECT = """
     FROM regions r
     LEFT JOIN regions p ON p.id = r.parent_id
     WHERE {predicate}
+    ORDER BY r.id
 """
 
 # Beyond this a request is asking for a bulk export, not a map. top_n caps a
@@ -107,10 +109,12 @@ def _collection(conn: psycopg.Connection, predicate: str, params: dict) -> dict:
 def for_regions(
     conn: psycopg.Connection, region_ids: list[int], tolerance: float
 ) -> dict:
-    """Geometry for specific regions, in no guaranteed order.
+    """Geometry for specific regions, ordered by region id rather than rank.
 
-    The caller already has the ordering from /query; re-sorting here would only
-    invite the client to depend on it.
+    The caller already has the ranked ordering from /query; sorting by rank
+    here would only invite the client to depend on it. The id order is just
+    what a deterministic query happens to produce, needed so /geometry/basemap
+    gets a stable ETag -- not a second ordering contract to rely on.
     """
     if not region_ids:
         return {"type": "FeatureCollection", "features": []}
@@ -124,6 +128,33 @@ def for_regions(
             "digits": _digits_for(tolerance),
         },
     )
+
+
+def basemap_digest(conn: psycopg.Connection, level: str, tolerance: float) -> str:
+    """A stable identifier for what /geometry/basemap currently returns.
+
+    Hashes the raw, unsimplified geometry rather than the simplified GeoJSON
+    the endpoint sends: ST_SimplifyPreserveTopology's output is not byte-stable
+    across repeated calls on identical input (confirmed directly -- the same
+    row's simplified polygon comes back with a different vertex count run to
+    run, on a single connection with parallel workers disabled, so it is GEOS's
+    algorithm and not query planning). Hashing that output would mint a new
+    ETag on almost every request even though nothing changed, defeating the
+    revalidation this endpoint exists to provide. Raw geometry only changes on
+    an ETL reimport, which is exactly the staleness this ETag needs to track.
+    """
+    tolerance = clamp_tolerance(tolerance)
+    digits = _digits_for(tolerance)
+    row = conn.execute(
+        """
+        SELECT md5(string_agg(md5(ST_AsEWKB(r.geom)), '' ORDER BY r.id)) AS digest
+        FROM regions r
+        WHERE r.level = %(level)s AND r.geom IS NOT NULL
+        """,
+        {"level": level},
+    ).fetchone()
+    content = row["digest"] or "empty"
+    return hashlib.sha256(f"{content}:{tolerance}:{digits}".encode()).hexdigest()[:32]
 
 
 def basemap(conn: psycopg.Connection, level: str, tolerance: float) -> dict:
