@@ -7,9 +7,9 @@ city-level query mentioning GDP per capita has to be rejected by name rather
 than quietly returning nothing.
 
 v1 has no time series, so one row per country is stored: the most recent year
-the World Bank has a non-empty value for (`mrnev=1`). The year travels with the
-value, so "GDP per capita" is never silently a mix of vintages without saying
-which one each country came from.
+(within the last few) the World Bank has a non-empty value for. The year
+travels with the value, so "GDP per capita" is never silently a mix of
+vintages without saying which one each country came from.
 """
 
 from __future__ import annotations
@@ -113,12 +113,20 @@ def _get_json(url: str, params: dict, attempts: int = 4) -> list:
     raise AssertionError("unreachable")
 
 
-def fetch_indicator(indicator: str) -> list[dict]:
-    """Fetch the most recent non-empty value of an indicator for every economy."""
+def fetch_indicator(indicator: str, years_back: int = 5) -> list[dict]:
+    """Fetch the most recent non-empty value of an indicator for every economy.
+
+    Asks for a window of recent observations (`mrv`) rather than the server-side
+    `mrnev` filter: the World Bank API intermittently (and, for some indicators,
+    persistently) returns 400 for `mrnev` while `mrv` keeps working — reproduced
+    with plain `curl` against their API directly, so it is not something a
+    retry here can paper over. "Most recent non-empty" is then computed
+    client-side by keeping, per economy, the highest-year row with a value.
+    """
     params = {
         "format": "json",
-        "per_page": "500",
-        "mrnev": "1",  # most recent non-empty value, one row per economy
+        "per_page": "20000",
+        "mrv": str(years_back),
     }
     payload = _get_json(API_URL.format(indicator=indicator), params)
     if not isinstance(payload, list) or len(payload) < 2:
@@ -130,8 +138,27 @@ def fetch_indicator(indicator: str) -> list[dict]:
             f"World Bank returned {len(rows)} of {header['total']} rows; "
             "raise per_page or paginate"
         )
-    log.info("fetched %d World Bank rows for %s", len(rows), indicator)
-    return rows
+
+    latest: dict[str, dict] = {}
+    for row in rows:
+        if row.get("value") is None:
+            continue
+        code = row.get("countryiso3code")
+        if not code:
+            continue
+        year = int(row["date"])
+        current = latest.get(code)
+        if current is None or year > int(current["date"]):
+            latest[code] = row
+
+    log.info(
+        "fetched %d World Bank rows for %s, %d economies with a value in the last %d years",
+        len(rows),
+        indicator,
+        len(latest),
+        years_back,
+    )
+    return list(latest.values())
 
 
 def fetch_aggregate_codes() -> set[str]:
