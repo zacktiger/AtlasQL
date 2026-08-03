@@ -1,12 +1,13 @@
 # AtlasQL
 
 A query engine over the world's administrative hierarchy (continent → country →
-state → county → city). You give it numeric conditions — "GDP per capita >
-40000 and mean elevation > 500" — and it picks the appropriate level, filters,
-ranks, and returns a top-N list.
+state → city). You give it numeric conditions — "GDP per capita > 40000 and
+mean elevation > 500" — and it picks the appropriate level, filters, ranks, and
+returns a top-N list.
 
 See `high-level-vision.md` for where this is going and
-`geo-query-engine-plan.md` for what v1 is.
+`geo-query-engine-plan.md` for what v1 is. `CLAUDE.md` has the invariants and
+domain gotchas if you're changing the engine rather than just running it.
 
 ## Setup
 
@@ -45,7 +46,11 @@ knows how many tiers exist.
 
 Every job is idempotent and upserts, so re-running is always safe. Source
 archives are cached under `data/raw/` after the first download — around 1.6 GB
-of DEM tiles and 0.5 GB of HydroRIVERS, downloaded once.
+of DEM tiles and 0.5 GB of HydroRIVERS, downloaded once. `import-natural-earth`,
+`import-states`, and `import-cities` are quick (seconds to low minutes);
+`import-elevation` and `import-rivers` are the slow ones — tens of minutes
+each on first run because of those downloads, much faster on a re-run since
+the archives are cached.
 
 Each job recomputes `metric_availability` in its own transaction. Coverage that
 lags the data it describes does not fail loudly, it silently changes which
@@ -70,6 +75,13 @@ highlights its row. Drag spins, scroll zooms, and zooming out always reaches the
 whole planet — the projection is orthographic at every scale, so a single
 country and the whole world are the same map, not two.
 
+"Compare two queries" splits the builder into Query A / Query B and runs them
+independently — each is a normal `POST /query` call with its own `GeoFilter`,
+rendered as two ranked tables side by side. There is no separate compare
+endpoint: the single-`GeoFilter`-contract rule means two queries are just two
+calls, not new API surface. (Compare mode is table-only; the globe view is
+single-query for now.)
+
 The basemap is our own `regions` table rather than a tile service, so every
 coastline on screen is a boundary some query could have returned. Region fills
 encode the metric the results are ranked by, on a single-hue sequential ramp.
@@ -81,7 +93,8 @@ its spherical clipping; see the README there for why they are checked in.
 - `GET /metadata` — metrics with per-level coverage, and levels with region
   counts. Generated from the live registry, so adding a metric through an ETL
   job makes it queryable and selectable without a code change.
-- `POST /query` — takes a `GeoFilter`, returns a ranked top-N.
+- `POST /query` — takes a `GeoFilter`, returns a ranked top-N. This is also
+  what compare mode calls twice.
 - `GET /geometry?ids=…&tolerance=…` — GeoJSON for regions `/query` returned,
   simplified to the detail the current zoom justifies. Separate from `/query`
   so asking for more detail never re-runs the query, and so `GeoFilter` in,
@@ -166,14 +179,45 @@ an empty table:
 python -m pytest
 ```
 
-Tests that need the database skip automatically when it is not running.
+Tests that need the database skip automatically when it is not running; the
+one live `/parse` test skips automatically without `ANTHROPIC_API_KEY`.
 
 ## Layout
 
 ```
-sql/               schema migrations, applied in filename order
-atlasql/config.py  environment-driven settings
-atlasql/db.py      connections, schema application, metric registry
-atlasql/etl/       one module per data source, all idempotent
-atlasql/cli.py     python -m atlasql.cli <command>
+sql/                    schema migrations, applied in filename order
+atlasql/config.py       environment-driven settings
+atlasql/db.py           connections, schema application, metric registry
+atlasql/models.py       GeoFilter / QueryResult / metadata Pydantic models
+atlasql/query.py        GeoFilter -> parameterized SQL, level auto-detection
+atlasql/geometry.py     regions -> simplified GeoJSON for the globe
+atlasql/parser.py       natural language -> GeoFilter via Claude tool use
+atlasql/api.py          FastAPI app: the endpoints above, serves frontend/
+atlasql/cli.py          python -m atlasql.cli <command>
+atlasql/etl/            one module per data source, all idempotent
+frontend/               static query builder + globe, no build step
+tests/                  pytest; DB- and API-key-dependent tests self-skip
 ```
+
+## Disk footprint and starting over
+
+A full local checkout is roughly 8-9 GB, almost none of it source:
+
+| What | Size | Recoverable from |
+|---|---|---|
+| Source + docs | ~0.5 MB | `git clone` |
+| `.venv/` | ~400 MB | `pip install -r requirements.txt` |
+| `data/raw/` (gitignored ETL downloads) | ~4.8 GB | re-run the ETL commands above; ~1.6 GB DEM + 0.5 GB HydroRIVERS re-download, the rest re-derives from cache |
+| `atlasql-db` Docker volume (imported database) | ~2.2 GB | `docker compose up -d` then every `import-*` job again |
+
+None of it is irreplaceable — GitHub is always the full source of truth — but
+**a restore is not just `git clone`.** After a fresh clone the database is
+empty, so every step under [ETL](#etl) has to run again, in order, starting
+from `init-db`. If you deleted `data/raw/` too, budget tens of minutes for
+`import-elevation` and `import-rivers` to re-download. If you deleted the
+`.env` file (or never had one), `/parse` stays disabled until
+`ANTHROPIC_API_KEY` is set again — everything else works without it.
+
+If you're clearing space without deleting the whole checkout, `data/raw/` and
+the Docker volume are the two big, safely-deletable, slow-to-rebuild pieces;
+`.venv/` is big but cheap to rebuild.
