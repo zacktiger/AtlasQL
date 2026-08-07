@@ -34,11 +34,24 @@ const OVERVIEW_TOLERANCE = 0.05;
 const DETAIL_TOLERANCE = 0.005;
 const DETAIL_ZOOM_FACTOR = 4;
 
+// The basemap gets the same treatment, for the same reason. A quarter-degree
+// simplification is plenty for the whole globe and falls apart when the camera
+// flies to a single city: each simplified segment is then a visible fraction of
+// the screen, and coastlines read as polygons. The finer version is 1.3 MB
+// against 550 KB, which is worth fetching once the zoom justifies it and not
+// before. /geometry/basemap caches per tolerance, so this is cheap after the
+// first client asks for it.
+const BASEMAP_OVERVIEW_TOLERANCE = 0.25;
+const BASEMAP_DETAIL_TOLERANCE = 0.05;
+
+const THEME_KEY = "atlasql-theme";
+
 let metadata = null;
 let conditionSeq = 0;
 let globe = null;
 let lastResult = null;
 let detailRequested = false;
+let basemapRefined = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -47,7 +60,7 @@ const $ = (id) => document.getElementById(id);
 // single-query panel and each side of the compare panel are three instances
 // of exactly this, never three copies of the logic - that would let them
 // drift out of sync with what GeoFilter actually accepts.
-function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, levelHint }) {
+function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, levelHint, onSubmit }) {
   function addCondition(metricName) {
     const id = ++conditionSeq;
     const row = document.createElement("div");
@@ -56,6 +69,7 @@ function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, 
 
     const metric = document.createElement("select");
     metric.className = "metric";
+    metric.setAttribute("aria-label", "Metric");
     for (const entry of metadata.metrics) {
       metric.appendChild(new Option(entry.label, entry.name));
     }
@@ -63,6 +77,7 @@ function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, 
 
     const op = document.createElement("select");
     op.className = "op";
+    op.setAttribute("aria-label", "Comparison");
     for (const entry of OPERATORS) op.appendChild(new Option(entry.label, entry.value));
 
     const value = document.createElement("input");
@@ -70,26 +85,42 @@ function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, 
     value.className = "value";
     value.step = "any";
     value.placeholder = "value";
-
-    const unit = document.createElement("span");
-    unit.className = "unit";
+    value.setAttribute("aria-label", "Threshold");
+    // Enter in a value field runs the query, which is what anyone who has just
+    // typed the last number expects.
+    if (onSubmit) {
+      value.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onSubmit();
+        }
+      });
+    }
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "remove";
     remove.textContent = "×";
     remove.title = "Remove this condition";
+    remove.setAttribute("aria-label", "Remove this condition");
     remove.onclick = () => {
       row.remove();
+      // A builder with no conditions cannot produce a valid GeoFilter, so the
+      // form never empties itself into an unrunnable state.
+      if (!conditions.querySelector(".condition")) addCondition();
       updateHints();
     };
+
+    const unit = document.createElement("span");
+    unit.className = "unit";
 
     const hint = document.createElement("span");
     hint.className = "hint coverage";
 
-    metric.onchange = updateHints;
-    row.append(metric, op, value, unit, remove, hint);
+    row.append(metric, op, value, remove, unit, hint);
     conditions.appendChild(row);
+
+    metric.onchange = updateHints;
     updateHints();
   }
 
@@ -177,7 +208,7 @@ function createPanel({ level, conditions, addConditionBtn, sortBy, order, topN, 
 
   function populateSelectors() {
     level.innerHTML = "";
-    level.appendChild(new Option("Auto (pick the most detailed level with data)", "auto"));
+    level.appendChild(new Option("Auto — most detailed level with data", "auto"));
     for (const entry of metadata.levels) {
       level.appendChild(
         new Option(`${titleCase(entry.name)} (${entry.region_count.toLocaleString()})`, entry.name)
@@ -205,6 +236,7 @@ const singlePanel = createPanel({
   order: $("order"),
   topN: $("top-n"),
   levelHint: $("level-hint"),
+  onSubmit: () => runQuery(),
 });
 const comparePanelA = createPanel({
   level: $("level-a"),
@@ -214,6 +246,7 @@ const comparePanelA = createPanel({
   order: $("order-a"),
   topN: $("top-n-a"),
   levelHint: $("level-hint-a"),
+  onSubmit: () => runCompare(),
 });
 const comparePanelB = createPanel({
   level: $("level-b"),
@@ -223,6 +256,7 @@ const comparePanelB = createPanel({
   order: $("order-b"),
   topN: $("top-n-b"),
   levelHint: $("level-hint-b"),
+  onSubmit: () => runCompare(),
 });
 
 async function loadMetadata() {
@@ -238,12 +272,55 @@ async function loadMetadata() {
   // it — better than offering a button that always fails.
   $("nl-panel").hidden = !metadata.natural_language_enabled;
 
-  singlePanel.addCondition();
-  singlePanel.updateHints();
-  comparePanelA.addCondition();
-  comparePanelA.updateHints();
-  comparePanelB.addCondition();
-  comparePanelB.updateHints();
+  for (const panel of [singlePanel, comparePanelA, comparePanelB]) {
+    panel.addCondition();
+    panel.updateHints();
+  }
+  buildCoverageGuide();
+}
+
+// The empty state is the only place to learn what can be asked, so it lists
+// what this deployment actually holds rather than suggesting queries.
+//
+// It is built from /metadata, which means it cannot drift from what the engine
+// will accept — and, more to the point, it teaches the coverage model that
+// decides every refusal the user will later see. Suggesting example queries
+// instead was worse on both counts: with nothing but metric names to go on, the
+// pairs they produce are arbitrary ("maximum elevation and minimum elevation"),
+// and a chosen threshold would be a guess about data this file cannot see.
+//
+// Clicking a metric adds it as a condition, which is the useful half of a
+// suggestion without the invented half.
+function buildCoverageGuide() {
+  const container = $("coverage-guide");
+  container.innerHTML = "";
+
+  for (const metric of metadata.metrics) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "guide-row";
+    row.title = metric.description || `Add a ${metric.label} condition`;
+
+    const name = document.createElement("span");
+    name.className = "guide-name";
+    name.textContent = metric.label + (metric.unit ? ` (${metric.unit})` : "");
+
+    const levels = document.createElement("span");
+    levels.className = "guide-levels";
+    if (metric.levels_with_data.length) {
+      levels.textContent = metric.levels_with_data.join(" · ");
+    } else {
+      levels.textContent = "no level has enough data";
+      levels.classList.add("warn");
+    }
+
+    row.append(name, levels);
+    row.onclick = () => {
+      singlePanel.addCondition(metric.name);
+      $("conditions").querySelector(".condition:last-child .value")?.focus();
+    };
+    container.appendChild(row);
+  }
 }
 
 // Compare mode swaps which builder(s) and result area are visible; it does
@@ -252,13 +329,12 @@ async function loadMetadata() {
 // filter should land on is ambiguous, so this keeps the ambiguity out
 // entirely rather than guessing.
 function setCompareMode(comparing) {
-  $("nl-panel").hidden = comparing || !metadata?.natural_language_enabled;
-  $("builder").hidden = comparing;
-  $("compare-panel").hidden = !comparing;
-  $("compare-error").hidden = true;
-  $("compare-results").hidden = comparing ? $("compare-results").hidden : true;
-  $("error").hidden = true;
-  $("results-panel").hidden = comparing || !lastResult;
+  $("single-layout").hidden = comparing;
+  $("compare-layout").hidden = !comparing;
+  $("mode-single").classList.toggle("is-active", !comparing);
+  $("mode-compare").classList.toggle("is-active", comparing);
+  $("mode-single").setAttribute("aria-pressed", String(!comparing));
+  $("mode-compare").setAttribute("aria-pressed", String(comparing));
 }
 
 async function parseText() {
@@ -307,10 +383,24 @@ function showError(message, detail) {
   $("error-detail").textContent = detail ?? "";
   $("error").hidden = false;
   $("results-panel").hidden = true;
+  $("empty-state").hidden = true;
+  // The map must never outlive the answer it drew. Leaving the last result up
+  // beside a refusal puts a legend for one metric next to an error about
+  // another, which is the map-disagreeing-with-the-table problem this codebase
+  // avoids everywhere else. The basemap stays: it is context, not an answer.
+  clearMap();
+}
+
+function clearMap() {
+  lastResult = null;
+  detailRequested = false;
+  globe?.setResults([], new Map());
+  $("map-legend").hidden = true;
+  $("globe-tooltip").hidden = true;
 }
 
 // Shared by the single-query table and each side of the compare table: same
-// columns, same formatting, same "-" for a metric a region lacks. onRowClick
+// columns, same formatting, same "—" for a metric a region lacks. onRowClick
 // is only wired up in single-query mode, where a row selection also drives
 // the globe; the compare tables are read-only lists with nothing to select.
 function renderTable(body, { head, tbody, onRowClick }) {
@@ -340,15 +430,25 @@ function renderTable(body, { head, tbody, onRowClick }) {
     // Selecting from the table flies the globe to the region; selecting from
     // the globe highlights the row. One selection, two views of it.
     if (onRowClick) tr.onclick = () => onRowClick(row.region_id);
-    for (const text of [index + 1, row.name, row.parent_name ?? "—"]) {
-      const td = document.createElement("td");
-      td.textContent = text;
-      tr.appendChild(td);
-    }
-    for (const name of metrics) {
+
+    const rank = document.createElement("td");
+    rank.className = "rank";
+    rank.textContent = index + 1;
+    tr.appendChild(rank);
+
+    const name = document.createElement("td");
+    name.className = "name";
+    name.textContent = row.name;
+    tr.appendChild(name);
+
+    const parent = document.createElement("td");
+    parent.textContent = row.parent_name ?? "—";
+    tr.appendChild(parent);
+
+    for (const metricName of metrics) {
       const td = document.createElement("td");
       td.className = "numeric";
-      const entry = row.metrics[name];
+      const entry = row.metrics[metricName];
       td.textContent = entry ? formatNumber(entry.value) : "—";
       // The vintage travels with each value, so a column mixing years says so.
       if (entry) td.title = `${entry.value} (${entry.year})`;
@@ -360,21 +460,37 @@ function renderTable(body, { head, tbody, onRowClick }) {
 
 function summarize(body) {
   const noun = body.count === 1 ? body.level : PLURALS[body.level] ?? `${body.level}s`;
-  return (
-    `${body.count} ${noun} — level chosen ` +
-    `${body.level_chosen_by === "auto" ? "automatically" : "by you"}`
-  );
+  return `${body.count} ${noun}`;
 }
 
 function renderResults(body) {
+  $("empty-state").hidden = true;
+  $("error").hidden = true;
+
+  if (body.count === 0) {
+    // An empty result is a real answer, not a failure — the query ran, and
+    // nothing cleared the thresholds. Saying which is which matters: this is a
+    // different outcome from a refusal, and the user's fix is different too.
+    // showError clears the map, which is right here as well; there is nothing
+    // to draw.
+    $("error-title").textContent = "No regions matched";
+    showError(
+      `The query ran at ${body.level} level and every ${body.level} was excluded ` +
+        "by your conditions.",
+      "Loosen a threshold, or check the units in the hints beside each condition."
+    );
+    return;
+  }
+
   renderTable(body, {
     head: $("results-head"),
     tbody: $("results-body"),
     onRowClick: (regionId) => selectRegion(regionId),
   });
   $("results-summary").textContent = summarize(body);
+  $("results-level").textContent =
+    `${body.level} · level chosen ${body.level_chosen_by === "auto" ? "automatically" : "by you"}`;
   $("results-panel").hidden = false;
-  $("error").hidden = true;
 
   // After the panel is visible, so the canvas has a size to measure.
   lastResult = body;
@@ -396,16 +512,20 @@ function setUpGlobe() {
     onCamera: maybeRefineDetail,
   });
 
-  fetch("/geometry/basemap?level=country&tolerance=0.25")
+  fetchBasemap(BASEMAP_OVERVIEW_TOLERANCE);
+
+  $("fit-results").onclick = () => globe.fitResults();
+  $("whole-globe").onclick = () => globe.home();
+}
+
+function fetchBasemap(tolerance) {
+  return fetch(`/geometry/basemap?level=country&tolerance=${tolerance}`)
     .then((response) => (response.ok ? response.json() : null))
     .then((collection) => collection && globe.setBasemap(collection))
     .catch((error) => {
       // Context outlines are not the answer to anything; results still draw.
       console.warn("basemap unavailable, drawing results without context", error);
     });
-
-  $("fit-results").onclick = () => globe.fitResults();
-  $("whole-globe").onclick = () => globe.home();
 }
 
 async function fetchGeometry(ids, tolerance) {
@@ -452,9 +572,19 @@ async function showOnMap(body) {
 }
 
 // Zoomed in past the point where the overview outline looks like a polygon
-// rather than a coastline, fetch the same regions at full detail once.
+// rather than a coastline, fetch the same regions at full detail once — and the
+// basemap under them, which has exactly the same problem at exactly the same
+// zoom. Both are one-shot: the flags are never reset, because a finer geometry
+// is still correct when zoomed back out, merely larger than it needed to be.
 function maybeRefineDetail(zoomFactor) {
-  if (detailRequested || zoomFactor < DETAIL_ZOOM_FACTOR || !lastResult) return;
+  if (zoomFactor < DETAIL_ZOOM_FACTOR) return;
+
+  if (!basemapRefined) {
+    basemapRefined = true;
+    fetchBasemap(BASEMAP_DETAIL_TOLERANCE);
+  }
+
+  if (detailRequested || !lastResult) return;
   detailRequested = true;
   fetchGeometry(
     lastResult.results.map((row) => row.region_id),
@@ -549,10 +679,13 @@ async function runQuery() {
   $("filter-json").textContent = JSON.stringify(filter, null, 2);
 
   if (filter.conditions.length === 0) {
+    $("error-title").textContent = "This query cannot be answered";
     showError("Add at least one condition with a value.");
     return;
   }
 
+  const button = $("run");
+  button.disabled = true;
   $("status").textContent = "running…";
   try {
     const result = await runOne(filter);
@@ -562,13 +695,16 @@ async function runQuery() {
       const detail = result.body.blocking_metric
         ? `Blocking metric: ${result.body.blocking_metric}`
         : JSON.stringify(result.body);
+      $("error-title").textContent = "This query cannot be answered";
       showError(result.body.error ?? "The API rejected this query.", detail);
       return;
     }
     renderResults(result.body);
   } catch (error) {
+    $("error-title").textContent = "This query cannot be answered";
     showError("Could not reach the API.", String(error));
   } finally {
+    button.disabled = false;
     $("status").textContent = "";
   }
 }
@@ -598,6 +734,8 @@ async function runCompare() {
     return;
   }
 
+  const button = $("run-compare");
+  button.disabled = true;
   $("compare-status").textContent = "running…";
   $("compare-error").hidden = true;
   try {
@@ -612,22 +750,44 @@ async function runCompare() {
     }
 
     renderTable(resultA.body, { head: $("compare-head-a"), tbody: $("compare-body-a") });
-    $("compare-summary-a").textContent = `Query A — ${summarize(resultA.body)}`;
+    $("compare-summary-a").textContent = `Query A — ${summarize(resultA.body)} (${resultA.body.level})`;
     renderTable(resultB.body, { head: $("compare-head-b"), tbody: $("compare-body-b") });
-    $("compare-summary-b").textContent = `Query B — ${summarize(resultB.body)}`;
+    $("compare-summary-b").textContent = `Query B — ${summarize(resultB.body)} (${resultB.body.level})`;
 
     $("compare-results").hidden = false;
     $("compare-error").hidden = true;
   } catch (error) {
     showCompareError(`Could not reach the API. ${error}`);
   } finally {
+    button.disabled = false;
     $("compare-status").textContent = "";
   }
 }
 
+// ------------------------------------------------------------------ theme --
+
+function currentTheme() {
+  const explicit = document.documentElement.getAttribute("data-theme");
+  if (explicit) return explicit;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function toggleTheme() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch (_) { /* private mode: the choice just does not persist */ }
+  // The globe reads its colours from CSS custom properties, so it has to be
+  // told the tokens moved. Its own listener only covers the system preference.
+  globe?.refreshPalette();
+}
+
 $("run").onclick = runQuery;
 $("run-compare").onclick = runCompare;
-$("compare-toggle").onchange = (event) => setCompareMode(event.target.checked);
+$("mode-single").onclick = () => setCompareMode(false);
+$("mode-compare").onclick = () => setCompareMode(true);
+$("theme-toggle").onclick = toggleTheme;
 $("parse").onclick = parseText;
 $("nl-text").addEventListener("keydown", (event) => {
   // Enter parses; Shift+Enter is a newline.
@@ -638,4 +798,10 @@ $("nl-text").addEventListener("keydown", (event) => {
 });
 
 setUpGlobe();
-loadMetadata().catch((error) => showError("Could not load /metadata.", String(error)));
+loadMetadata().catch((error) => {
+  $("error-title").textContent = "Could not load /metadata";
+  showError(
+    "The metric and level lists come from the API, so the builder cannot be shown without it.",
+    String(error)
+  );
+});

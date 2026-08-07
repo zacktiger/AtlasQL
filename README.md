@@ -69,11 +69,24 @@ ETL job appears after a reload with no frontend change. Every condition shows
 which levels actually have data for it, and a query that cannot be answered
 shows the API's refusal naming the blocking metric rather than an empty table.
 
+The builder sits beside the map rather than above it, and the globe is drawn
+before you have run anything — the empty state lists what this deployment
+actually holds, metric by metric with the levels each one reaches, which is the
+same coverage model that decides every refusal you will later see. Light and
+dark follow the system preference and can be overridden; the globe reads its
+palette from the same CSS tokens, so it changes with the page.
+
 Results are drawn on a globe as well as in the table. The two are one selection
 seen twice: clicking a row turns the globe to that region, clicking a region
 highlights its row. Drag spins, scroll zooms, and zooming out always reaches the
 whole planet — the projection is orthographic at every scale, so a single
-country and the whole world are the same map, not two.
+country and the whole world are the same map, not two. Both the result outlines
+and the basemap under them are refetched at finer detail once the zoom justifies
+it, and a fly-to never goes closer than the basemap can honestly draw.
+
+A refusal clears the map. Leaving the previous answer up beside an error would
+put a legend for one metric next to a message about another, which is the
+map-disagreeing-with-the-table problem the rest of the design avoids.
 
 "Compare two queries" splits the builder into Query A / Query B and runs them
 independently — each is a normal `POST /query` call with its own `GeoFilter`,

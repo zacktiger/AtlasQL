@@ -29,9 +29,19 @@ const FLY_MS = 700;
 // Padding factor when fitting: results should not touch the edge of the canvas.
 const FIT_PADDING = 1.35;
 
-// A single city is a point with no extent. Without a floor the fit would divide
-// by zero and zoom to infinity; ~1.5 degrees is a comfortable regional view.
-const MIN_FIT_RADIANS = 0.025;
+// A single city is a point with no extent, so without a floor the fit would
+// divide by zero and zoom to infinity.
+//
+// The floor is set by the basemap, not by taste. The whole world is served
+// simplified — a quarter degree at rest, a twentieth once the zoom asks for it —
+// and a simplification only looks like a coastline while it stays small against
+// the visible span. At 0.06 radians (~3.4 degrees, roughly a 400 km radius) a
+// 0.05 degree segment is about one percent of the view; closer than that and the
+// land dissolves into spikes and triangles, which reads as a rendering bug
+// rather than as the edge of the data. Zooming in further by hand is still
+// allowed — that is the user choosing to look at the simplification. Flying
+// there on their behalf and presenting it as the answer is not.
+const MIN_FIT_RADIANS = 0.06;
 
 // 80 degrees from the centre of the disc. Past this a region is so foreshortened
 // by the curve of the globe that calling it visible would be a lie.
@@ -510,6 +520,14 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
 
     hasResults() {
       return results.length > 0;
+    },
+
+    // The media query below covers the system preference changing. An explicit
+    // theme choice moves the same tokens without it firing, so the page has to
+    // say so — otherwise the map keeps yesterday's palette on a repainted page.
+    refreshPalette() {
+      palette = readPalette();
+      draw();
     },
   };
 }

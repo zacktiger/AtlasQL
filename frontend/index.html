@@ -3,133 +3,246 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AtlasQL</title>
+  <title>AtlasQL — search the world itself</title>
+  <meta name="description" content="A query engine over the world's administrative hierarchy. Combine numeric conditions and get a ranked answer on a globe.">
+  <!-- Inline so it costs no request and the tab never shows a 404 favicon. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%232f6f4e'/%3E%3Cpath d='M16 3a13 13 0 000 26M3 16h26M6 9h20M6 23h20' stroke='%23fff' stroke-width='1.6' fill='none' opacity='.85'/%3E%3Cellipse cx='16' cy='16' rx='6.5' ry='13' stroke='%23fff' stroke-width='1.6' fill='none' opacity='.85'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Before first paint, so choosing dark does not flash light on every load.
+    try {
+      const saved = localStorage.getItem("atlasql-theme");
+      if (saved === "dark" || saved === "light") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+    } catch (_) { /* private mode: fall back to the system preference */ }
+  </script>
 </head>
 <body>
-  <header>
-    <h1>AtlasQL</h1>
-    <p class="tagline">Search the world itself, not dataset by dataset.</p>
-    <label class="compare-switch">
-      <input type="checkbox" id="compare-toggle">
-      Compare two queries
-    </label>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="13" />
+        <path d="M3 16h26M6 9h20M6 23h20" />
+        <ellipse cx="16" cy="16" rx="6.5" ry="13" />
+      </svg>
+      <div>
+        <h1>AtlasQL</h1>
+        <p class="tagline">Search the world itself, not dataset by dataset.</p>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="segmented" role="group" aria-label="Query mode">
+        <button type="button" id="mode-single" class="segment is-active" aria-pressed="true">Single</button>
+        <button type="button" id="mode-compare" class="segment" aria-pressed="false">Compare</button>
+      </div>
+      <button type="button" id="theme-toggle" class="icon-button" aria-label="Switch between light and dark">
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" />
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 1010.5 10.5z" />
+        </svg>
+      </button>
+    </div>
   </header>
 
-  <main>
-    <section id="nl-panel" class="nl" aria-label="Ask in plain English" hidden>
-      <label for="nl-text">Ask in plain English</label>
-      <div class="nl-row">
-        <textarea id="nl-text" rows="2"
-          placeholder="cities above 2,000 m with more than 500,000 people"></textarea>
-        <button type="button" id="parse">Parse</button>
-      </div>
-      <p class="hint" id="nl-status">
-        Parsing fills in the form below. Nothing runs until you press Run query.
-      </p>
-    </section>
+  <main class="layout" id="single-layout">
+    <!-- ------------------------------------------------------- the builder -->
+    <aside class="sidebar">
+      <section id="nl-panel" class="card nl" aria-label="Ask in plain English" hidden>
+        <div class="card-head">
+          <h2>Ask in plain English</h2>
+          <span class="badge">optional</span>
+        </div>
+        <div class="nl-row">
+          <textarea id="nl-text" rows="2"
+            placeholder="cities above 2,000 m with more than 500,000 people"></textarea>
+        </div>
+        <div class="nl-actions">
+          <button type="button" id="parse" class="secondary">Parse into the form</button>
+          <span class="hint" id="nl-status">Nothing runs until you press Run query.</span>
+        </div>
+      </section>
 
-    <section id="builder" class="builder" aria-label="Query builder">
-      <div class="row">
-        <label for="level">Level</label>
-        <select id="level"></select>
-        <span class="hint" id="level-hint"></span>
-      </div>
+      <section id="builder" class="card builder" aria-label="Query builder">
+        <div class="field">
+          <label for="level">Level</label>
+          <select id="level"></select>
+          <p class="hint" id="level-hint"></p>
+        </div>
 
-      <fieldset>
-        <legend>Conditions</legend>
-        <div id="conditions"></div>
-        <button type="button" id="add-condition" class="secondary">+ Add condition</button>
-      </fieldset>
-
-      <div class="row">
-        <label for="sort-by">Sort by</label>
-        <select id="sort-by"></select>
-        <select id="order">
-          <option value="desc">highest first</option>
-          <option value="asc">lowest first</option>
-        </select>
-        <label for="top-n">Top</label>
-        <input type="number" id="top-n" value="10" min="1" max="100">
-      </div>
-
-      <div class="row actions">
-        <button type="button" id="run">Run query</button>
-        <span class="hint" id="status"></span>
-      </div>
-    </section>
-
-    <!-- Compare mode: two independent builders, each producing its own
-         GeoFilter and hitting the same /query endpoint as the single-query
-         path above. There is still exactly one way to run a filter; this just
-         runs it twice and lines up the two result tables. No map here - a
-         second globe would fight the first one for the same screen space
-         without adding an answer the tables don't already give. -->
-    <section id="compare-panel" class="builder" aria-label="Compare two queries" hidden>
-      <div class="compare-grid">
-        <div class="compare-column">
-          <h2>Query A</h2>
-          <div class="row">
-            <label for="level-a">Level</label>
-            <select id="level-a"></select>
-            <span class="hint" id="level-hint-a"></span>
+        <div class="field">
+          <div class="field-head">
+            <label id="conditions-label">Conditions</label>
+            <button type="button" id="add-condition" class="ghost">+ Add</button>
           </div>
-          <fieldset>
-            <legend>Conditions</legend>
-            <div id="conditions-a"></div>
-            <button type="button" id="add-condition-a" class="secondary">+ Add condition</button>
-          </fieldset>
-          <div class="row">
-            <label for="sort-by-a">Sort by</label>
-            <select id="sort-by-a"></select>
-            <select id="order-a">
+          <div id="conditions" role="group" aria-labelledby="conditions-label"></div>
+        </div>
+
+        <div class="field">
+          <label for="sort-by">Rank by</label>
+          <select id="sort-by"></select>
+          <div class="split">
+            <select id="order" aria-label="Sort direction">
               <option value="desc">highest first</option>
               <option value="asc">lowest first</option>
             </select>
-            <label for="top-n-a">Top</label>
-            <input type="number" id="top-n-a" value="10" min="1" max="100">
+            <div class="topn">
+              <label for="top-n">Top</label>
+              <input type="number" id="top-n" value="10" min="1" max="100">
+            </div>
           </div>
         </div>
 
-        <div class="compare-column">
-          <h2>Query B</h2>
-          <div class="row">
-            <label for="level-b">Level</label>
-            <select id="level-b"></select>
-            <span class="hint" id="level-hint-b"></span>
+        <div class="run-row">
+          <button type="button" id="run" class="primary">Run query</button>
+          <span class="hint" id="status"></span>
+        </div>
+      </section>
+
+      <details id="filter-panel" class="card">
+        <summary>GeoFilter sent to the API</summary>
+        <pre id="filter-json"></pre>
+      </details>
+    </aside>
+
+    <!-- ------------------------------------------------------- the results -->
+    <div class="results">
+      <section class="card map-card">
+        <div class="map">
+          <canvas id="globe" aria-label="Results on a globe"></canvas>
+          <div id="globe-tooltip" class="map-tooltip" hidden></div>
+          <p class="map-help">Drag to spin · scroll to zoom · click a region to select</p>
+          <div class="map-controls">
+            <button type="button" id="fit-results" class="chip">Fit results</button>
+            <button type="button" id="whole-globe" class="chip">Whole globe</button>
           </div>
-          <fieldset>
-            <legend>Conditions</legend>
-            <div id="conditions-b"></div>
-            <button type="button" id="add-condition-b" class="secondary">+ Add condition</button>
-          </fieldset>
-          <div class="row">
-            <label for="sort-by-b">Sort by</label>
-            <select id="sort-by-b"></select>
-            <select id="order-b">
+          <div id="map-legend" class="map-legend" hidden>
+            <span id="legend-label"></span>
+            <span id="legend-low" class="legend-end"></span>
+            <span class="legend-ramp"></span>
+            <span id="legend-high" class="legend-end"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="error" class="card error" hidden>
+        <h2 id="error-title">This query cannot be answered</h2>
+        <p id="error-message"></p>
+        <p id="error-detail" class="hint"></p>
+      </section>
+
+      <section id="empty-state" class="card empty">
+        <h2>Nothing run yet</h2>
+        <p>Add a condition on the left and press <strong>Run query</strong>. The
+           engine picks the most detailed level where every metric you named
+           actually has data, then ranks what is left. Combine metrics freely —
+           there are no templates, and a combination nothing can answer comes
+           back as a named refusal rather than an empty table.</p>
+        <h3 class="guide-title">What this deployment holds</h3>
+        <div id="coverage-guide" class="guide"></div>
+      </section>
+
+      <section id="results-panel" class="card" hidden>
+        <div class="results-head">
+          <h2 id="results-summary"></h2>
+          <span id="results-level" class="badge"></span>
+        </div>
+        <div class="table-scroll">
+          <table id="results">
+            <thead><tr id="results-head"></tr></thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Compare mode: two independent builders, each producing its own GeoFilter
+       and hitting the same /query endpoint as the single-query path. There is
+       still exactly one way to run a filter; this runs it twice and lines the
+       two result tables up. No map here - a second globe would fight the first
+       for the same screen space without adding an answer the tables don't
+       already give. -->
+  <main class="compare-layout" id="compare-layout" hidden>
+    <div class="compare-grid">
+      <section class="card compare-column">
+        <div class="card-head"><h2>Query A</h2></div>
+        <div class="field">
+          <label for="level-a">Level</label>
+          <select id="level-a"></select>
+          <p class="hint" id="level-hint-a"></p>
+        </div>
+        <div class="field">
+          <div class="field-head">
+            <label id="conditions-label-a">Conditions</label>
+            <button type="button" id="add-condition-a" class="ghost">+ Add</button>
+          </div>
+          <div id="conditions-a" role="group" aria-labelledby="conditions-label-a"></div>
+        </div>
+        <div class="field">
+          <label for="sort-by-a">Rank by</label>
+          <select id="sort-by-a"></select>
+          <div class="split">
+            <select id="order-a" aria-label="Sort direction">
               <option value="desc">highest first</option>
               <option value="asc">lowest first</option>
             </select>
-            <label for="top-n-b">Top</label>
-            <input type="number" id="top-n-b" value="10" min="1" max="100">
+            <div class="topn">
+              <label for="top-n-a">Top</label>
+              <input type="number" id="top-n-a" value="10" min="1" max="100">
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div class="row actions">
-        <button type="button" id="run-compare">Run comparison</button>
-        <span class="hint" id="compare-status"></span>
-      </div>
-    </section>
+      <section class="card compare-column">
+        <div class="card-head"><h2>Query B</h2></div>
+        <div class="field">
+          <label for="level-b">Level</label>
+          <select id="level-b"></select>
+          <p class="hint" id="level-hint-b"></p>
+        </div>
+        <div class="field">
+          <div class="field-head">
+            <label id="conditions-label-b">Conditions</label>
+            <button type="button" id="add-condition-b" class="ghost">+ Add</button>
+          </div>
+          <div id="conditions-b" role="group" aria-labelledby="conditions-label-b"></div>
+        </div>
+        <div class="field">
+          <label for="sort-by-b">Rank by</label>
+          <select id="sort-by-b"></select>
+          <div class="split">
+            <select id="order-b" aria-label="Sort direction">
+              <option value="desc">highest first</option>
+              <option value="asc">lowest first</option>
+            </select>
+            <div class="topn">
+              <label for="top-n-b">Top</label>
+              <input type="number" id="top-n-b" value="10" min="1" max="100">
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
 
-    <section id="compare-error" class="error" hidden>
+    <div class="run-row centered">
+      <button type="button" id="run-compare" class="primary">Run comparison</button>
+      <span class="hint" id="compare-status"></span>
+    </div>
+
+    <section id="compare-error" class="card error" hidden>
       <h2>This comparison cannot be answered</h2>
       <p id="compare-error-message"></p>
     </section>
 
     <section id="compare-results" class="compare-grid" hidden>
-      <div class="compare-column">
-        <h2 id="compare-summary-a"></h2>
+      <div class="card compare-column">
+        <div class="results-head"><h2 id="compare-summary-a"></h2></div>
         <div class="table-scroll">
           <table id="compare-table-a">
             <thead><tr id="compare-head-a"></tr></thead>
@@ -137,8 +250,8 @@
           </table>
         </div>
       </div>
-      <div class="compare-column">
-        <h2 id="compare-summary-b"></h2>
+      <div class="card compare-column">
+        <div class="results-head"><h2 id="compare-summary-b"></h2></div>
         <div class="table-scroll">
           <table id="compare-table-b">
             <thead><tr id="compare-head-b"></tr></thead>
@@ -147,44 +260,6 @@
         </div>
       </div>
     </section>
-
-    <section id="error" class="error" hidden>
-      <h2>This query cannot be answered</h2>
-      <p id="error-message"></p>
-      <p id="error-detail" class="hint"></p>
-    </section>
-
-    <section id="results-panel" hidden>
-      <h2 id="results-summary"></h2>
-
-      <div class="map">
-        <canvas id="globe" aria-label="Results on a globe"></canvas>
-        <div id="globe-tooltip" class="map-tooltip" hidden></div>
-        <div class="map-controls">
-          <button type="button" id="fit-results" class="secondary">Fit results</button>
-          <button type="button" id="whole-globe" class="secondary">Whole globe</button>
-        </div>
-        <div id="map-legend" class="map-legend" hidden>
-          <span id="legend-label"></span>
-          <span id="legend-low" class="legend-end"></span>
-          <span class="legend-ramp"></span>
-          <span id="legend-high" class="legend-end"></span>
-        </div>
-        <p class="hint map-help">Drag to spin, scroll to zoom, click a region to select it.</p>
-      </div>
-
-      <div class="table-scroll">
-        <table id="results">
-          <thead><tr id="results-head"></tr></thead>
-          <tbody id="results-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <details id="filter-panel">
-      <summary>GeoFilter sent to the API</summary>
-      <pre id="filter-json"></pre>
-    </details>
   </main>
 
   <!-- Classic scripts, so both are evaluated before the deferred module below

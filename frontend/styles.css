@@ -1,15 +1,38 @@
-:root {
-  --bg: #fbfbf9;
-  --panel: #ffffff;
-  --ink: #1c1c1a;
-  --muted: #6b6b66;
-  --line: #e0e0da;
-  --accent: #2f6f4e;
-  --warn: #8a4b1e;
-  --warn-bg: #fdf3e8;
+/* AtlasQL.
+   ---------------------------------------------------------------------------
+   Three rules this sheet is built on:
 
-  /* Map chrome. Deliberately low-chroma: the only saturated colour on the
-     globe should be the data. */
+     * The only saturated colour on screen belongs to the data. Chrome is
+       near-neutral so a result region reads as the thing that matters.
+     * Every colour is a token defined on :root, because globe.js reads the
+       --map-* and --ramp-* values off the canvas at runtime. This file stays
+       the single description of light and dark; the map has no palette of its
+       own to fall out of sync.
+     * Dark mode has to work three ways: an explicit choice either direction,
+       and the system preference when no choice has been made. So the full
+       palette is defined on bare :root, and only the tokens that differ are
+       redefined under the media query and the [data-theme] selector.
+--------------------------------------------------------------------------- */
+
+:root {
+  --bg: #f7f7f4;
+  --panel: #ffffff;
+  --panel-sunk: #fafaf8;
+  --ink: #16171a;
+  --ink-soft: #45474d;
+  --muted: #6d7078;
+  --line: #e3e3dd;
+  --line-strong: #d0d0c8;
+  --accent: #2f6f4e;
+  --accent-ink: #ffffff;
+  --accent-soft: #eaf3ee;
+  --warn: #8a4b1e;
+  --warn-bg: #fdf4ea;
+  --warn-line: #e8c9a5;
+  --shadow: 0 1px 2px rgba(16, 18, 20, 0.04), 0 6px 16px -8px rgba(16, 18, 20, 0.12);
+  --shadow-lift: 0 2px 6px rgba(16, 18, 20, 0.08), 0 12px 28px -12px rgba(16, 18, 20, 0.22);
+
+  /* Map chrome. Deliberately low-chroma. */
   --map-ocean: #e6edf2;
   --map-land: #cbc8bb;
   --map-land-line: #a3a093;
@@ -28,31 +51,43 @@
   --ramp-4: #256abf;
   --ramp-5: #184f95;
   --ramp-6: #0d366b;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --sidebar: 23rem;
 }
 
+/* System preference, unless an explicit light choice overrides it. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181a;
-    --panel: #1e2124;
-    --ink: #e8e8e4;
-    --muted: #9a9a94;
-    --line: #32363a;
+  :root:not([data-theme="light"]) {
+    --bg: #101214;
+    --panel: #191c1f;
+    --panel-sunk: #141719;
+    --ink: #e9e9e5;
+    --ink-soft: #c2c3c0;
+    --muted: #8e9196;
+    --line: #2b2f33;
+    --line-strong: #3a3f44;
     --accent: #6fbf8f;
+    --accent-ink: #08110c;
+    --accent-soft: #16241c;
     --warn: #e0a66a;
-    --warn-bg: #2a211a;
+    --warn-bg: #241c14;
+    --warn-line: #4a3a26;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
+    --shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.5), 0 12px 28px -12px rgba(0, 0, 0, 0.7);
 
     --map-ocean: #0b1114;
     --map-land: #3d4549;
     --map-land-line: #5b6469;
     --map-graticule: rgba(255, 255, 255, 0.07);
-    --map-surface: #1e2124;
+    --map-surface: #191c1f;
     --map-select: #6fbf8f;
     --map-ink: #ffffff;
 
-    /* The ramp's anchor flips rather than the ramp being inverted by filter:
-       "least" must still be the step that recedes into the surface, and on a
-       dark surface that is the dark end. Same hue, same steps, read the other
-       way round. */
+    /* The ramp's anchor flips rather than the ramp being inverted: "least"
+       must still be the step that recedes into the surface, and on a dark
+       surface that is the dark end. Same hue, same steps, read the other way. */
     --ramp-0: #0d366b;
     --ramp-1: #184f95;
     --ramp-2: #256abf;
@@ -63,238 +98,539 @@
   }
 }
 
-* { box-sizing: border-box; }
+/* Explicit dark, which must win over a light system preference too. */
+:root[data-theme="dark"] {
+  --bg: #101214;
+  --panel: #191c1f;
+  --panel-sunk: #141719;
+  --ink: #e9e9e5;
+  --ink-soft: #c2c3c0;
+  --muted: #8e9196;
+  --line: #2b2f33;
+  --line-strong: #3a3f44;
+  --accent: #6fbf8f;
+  --accent-ink: #08110c;
+  --accent-soft: #16241c;
+  --warn: #e0a66a;
+  --warn-bg: #241c14;
+  --warn-line: #4a3a26;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
+  --shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.5), 0 12px 28px -12px rgba(0, 0, 0, 0.7);
+
+  --map-ocean: #0b1114;
+  --map-land: #3d4549;
+  --map-land-line: #5b6469;
+  --map-graticule: rgba(255, 255, 255, 0.07);
+  --map-surface: #191c1f;
+  --map-select: #6fbf8f;
+  --map-ink: #ffffff;
+
+  --ramp-0: #0d366b;
+  --ramp-1: #184f95;
+  --ramp-2: #256abf;
+  --ramp-3: #3987e5;
+  --ramp-4: #6da7ec;
+  --ramp-5: #9ec5f4;
+  --ramp-6: #cde2fb;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
   margin: 0;
-  padding: 2rem 1.5rem 4rem;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-header, main { max-width: 68rem; margin: 0 auto; }
+h1, h2 { margin: 0; font-weight: 600; letter-spacing: -0.011em; }
+h1 { font-size: 1.15rem; }
+h2 { font-size: 0.95rem; }
+p { margin: 0; }
 
-h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
-h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
-.tagline { margin: 0.25rem 0 1.75rem; color: var(--muted); }
+/* ------------------------------------------------------------------ topbar */
 
-.compare-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: -1.25rem 0 1.75rem;
-  color: var(--muted);
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-section, fieldset, details {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-
-.nl { padding: 1.25rem; margin-bottom: 1.25rem; }
-.nl label { display: block; margin-bottom: 0.5rem; }
-.nl-row { display: flex; gap: 0.6rem; align-items: flex-start; }
-.nl-row textarea {
-  flex: 1;
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0.5rem 0.6rem;
-  resize: vertical;
-}
-.nl-row textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.nl .hint { display: block; margin: 0.55rem 0 0; }
-button:disabled { opacity: 0.6; cursor: default; }
-
-.builder { padding: 1.25rem; margin-bottom: 1.25rem; }
-
-fieldset { margin: 1rem 0; padding: 1rem; }
-legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; }
-
-.row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.row + .row { margin-top: 0.9rem; }
-.row.actions { margin-top: 1.1rem; }
-
-label { color: var(--muted); font-size: 0.9rem; }
-
-select, input {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0.4rem 0.55rem;
-}
-input[type="number"] { width: 8.5rem; }
-select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-button {
-  font: inherit;
-  font-weight: 500;
-  color: #fff;
-  background: var(--accent);
-  border: 1px solid transparent;
-  border-radius: 7px;
-  padding: 0.45rem 1rem;
-  cursor: pointer;
-}
-button.secondary { color: var(--ink); background: transparent; border-color: var(--line); }
-button.remove {
-  color: var(--muted);
-  background: transparent;
-  border: none;
-  font-size: 1.2rem;
-  line-height: 1;
-  padding: 0 0.4rem;
-}
-button:hover { filter: brightness(1.08); }
-
-.condition {
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: space-between;
+  gap: 1rem;
   flex-wrap: wrap;
-  padding: 0.45rem 0;
+  padding: 0.8rem clamp(1rem, 3vw, 2rem);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(10px);
 }
-.condition + .condition { border-top: 1px dashed var(--line); }
-.condition .op { width: 4.5rem; }
-.unit { color: var(--muted); font-size: 0.85rem; min-width: 3rem; }
 
-.hint { color: var(--muted); font-size: 0.82rem; }
-.hint.warn { color: var(--warn); }
-.coverage { flex-basis: 100%; }
-
-.error {
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
-  border-color: var(--warn);
-  background: var(--warn-bg);
+.brand { display: flex; align-items: center; gap: 0.7rem; }
+.mark {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  color: var(--accent);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
 }
-.error h2 { color: var(--warn); }
-.error p { margin: 0.25rem 0; }
+.mark circle { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
+.tagline { color: var(--muted); font-size: 0.8rem; }
 
-#results-panel { padding: 1.25rem; }
-.table-scroll { overflow-x: auto; }
+.topbar-actions { display: flex; align-items: center; gap: 0.6rem; }
 
-/* Compare mode: two builders, then two result tables, side by side.
-   auto-fit + minmax reflows to one column on a narrow viewport without a
-   separate breakpoint. */
-.compare-grid[hidden] { display: none; }
-.compare-grid {
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--panel-sunk);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.segment {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.83rem;
+  font-weight: 500;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.segment.is-active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.icon-button {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
-  gap: 1.25rem;
-}
-.compare-column {
-  min-width: 0; /* let the table scroll instead of forcing the grid track wide */
-}
-/* #compare-results is itself a <section>, which would otherwise double up
-   the panel background/border already drawn by each .compare-column card. */
-#compare-results { background: none; border: none; }
-#compare-results .compare-column {
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--ink-soft);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 1.25rem;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.icon-button:hover { border-color: var(--line-strong); color: var(--ink); }
+.icon-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+/* Show the icon for the mode the button switches *to*. */
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: block; }
 }
 
+/* ------------------------------------------------------------------ layout */
+
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: 1.1rem;
+  align-items: start;
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: 1.1rem clamp(1rem, 3vw, 2rem) 4rem;
+}
+.compare-layout {
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: 1.1rem clamp(1rem, 3vw, 2rem) 4rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.1rem;
+}
+[hidden] { display: none !important; }
+
+/* minmax(0, 1fr) rather than the implicit `auto` track on both of these.
+   An auto track is sized from its content's minimum, and the results table sets
+   white-space: nowrap, so its min-content width is the full un-wrapped table —
+   which dragged the whole column past the viewport and made the page scroll
+   sideways on a phone. The horizontal scrolling belongs to .table-scroll. */
+.sidebar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.1rem;
+  position: sticky;
+  top: 4.4rem;
+}
+.results {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.1rem;
+  min-width: 0;
+}
+
+/* One column once the sidebar would squeeze the map into a strip. */
+@media (max-width: 62rem) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: static; }
+}
+
+/* ------------------------------------------------------------------- cards */
+
+.card {
+  min-width: 0; /* a grid/flex item defaults to min-content, which a wide table wins */
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.05rem;
+  box-shadow: var(--shadow);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.badge {
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- form parts */
+
+.field { display: grid; gap: 0.4rem; }
+.field + .field { margin-top: 1rem; }
+.field-head { display: flex; align-items: center; justify-content: space-between; }
+
+label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+select, input, textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+}
+textarea { resize: vertical; line-height: 1.5; }
+select { cursor: pointer; }
+select:hover, input:hover, textarea:hover { border-color: var(--line-strong); }
+select:focus-visible, input:focus-visible, textarea:focus-visible,
+button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.split { display: flex; gap: 0.5rem; }
+.split select { flex: 1; }
+.topn { display: flex; align-items: center; gap: 0.4rem; }
+.topn input { width: 4.5rem; }
+
+/* Named areas rather than a single row of columns: metric labels are long
+   ("GDP per capita (PPP)") and a sidebar is narrow, so sharing one row with the
+   operator and the threshold truncated the one control whose value you most
+   need to read. The metric gets the full width; the comparison sits under it. */
+.condition {
+  display: grid;
+  grid-template-columns: 4.4rem minmax(3.5rem, 1fr) auto auto;
+  grid-template-areas:
+    "metric metric metric metric"
+    "op     value  unit   remove"
+    "hint   hint   hint   hint";
+  gap: 0.35rem 0.4rem;
+  align-items: center;
+  padding: 0.6rem 0;
+}
+.condition + .condition { border-top: 1px dashed var(--line); }
+.condition .metric { grid-area: metric; }
+.condition .op { grid-area: op; }
+.condition .value { grid-area: value; }
+.condition .remove { grid-area: remove; justify-self: end; }
+.condition .unit {
+  grid-area: unit;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.condition .coverage { grid-area: hint; }
+.condition .remove {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.condition .remove:hover { color: var(--warn); border-color: var(--line); }
+
+.hint { color: var(--muted); font-size: 0.78rem; }
+.hint.warn { color: var(--warn); }
+
+/* --------------------------------------------------------------- buttons */
+
+button { font: inherit; }
+.primary, .secondary, .ghost, .chip {
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid transparent;
+  padding: 0.5rem 1.1rem;
+}
+.primary:hover { background: color-mix(in srgb, var(--accent) 86%, black); }
+.secondary {
+  color: var(--ink);
+  background: var(--panel-sunk);
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.85rem;
+}
+.secondary:hover { border-color: var(--line-strong); }
+.ghost {
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+}
+.ghost:hover { background: var(--accent-soft); }
+button:disabled { opacity: 0.55; cursor: default; }
+button:disabled:hover { background: var(--accent); border-color: var(--line); }
+
+.run-row { display: flex; align-items: center; gap: 0.75rem; margin-top: 1.1rem; flex-wrap: wrap; }
+.run-row.centered { justify-content: center; margin-top: 0; }
+.run-row .primary { flex: none; }
+
+/* Natural language box */
+.nl-row { margin-bottom: 0.55rem; }
+.nl-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.nl-actions .hint { flex: 1 1 10rem; min-width: 0; }
+
+/* ---------------------------------------------------------------- the map */
+
+.map-card { padding: 0; overflow: hidden; }
 .map {
   position: relative;
-  margin-bottom: 1.25rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  overflow: hidden;
   background: var(--map-ocean);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
-/* Tall enough to be a map rather than a strip, capped so the table below stays
-   on screen on a laptop. */
+/* Tall enough to be a map rather than a strip, capped so the table below is
+   still reachable on a laptop without scrolling past the whole viewport. */
 #globe {
   display: block;
   width: 100%;
-  height: min(58vh, 30rem);
+  height: clamp(20rem, 52vh, 34rem);
   touch-action: none;
   cursor: grab;
 }
 #globe:active { cursor: grabbing; }
 
-.map-controls {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.6rem;
-  display: flex;
-  gap: 0.4rem;
+.map-controls { position: absolute; top: 0.7rem; right: 0.7rem; display: flex; gap: 0.35rem; }
+.chip {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
 }
-.map-controls button {
-  background: var(--panel);
-  border-color: var(--line);
-  font-size: 0.82rem;
-  padding: 0.3rem 0.65rem;
+.chip:hover { border-color: var(--line-strong); }
+
+.map-help {
+  position: absolute;
+  left: 0.85rem;
+  top: 0.85rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+/* On a narrow screen this runs under the map buttons, and it is describing
+   gestures a touch user already has. */
+@media (max-width: 34rem) {
+  .map-help { display: none; }
 }
 
 .map-legend {
   position: absolute;
-  left: 0.6rem;
-  bottom: 0.6rem;
+  left: 0.7rem;
+  bottom: 0.7rem;
   display: flex;
   align-items: center;
   gap: 0.45rem;
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(6px);
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-variant-numeric: tabular-nums;
 }
 .legend-ramp {
-  width: 6rem;
+  width: 5.5rem;
   height: 0.5rem;
   border-radius: 3px;
-  background: linear-gradient(
-    to right,
+  background: linear-gradient(to right,
     var(--ramp-0), var(--ramp-1), var(--ramp-2), var(--ramp-3),
-    var(--ramp-4), var(--ramp-5), var(--ramp-6)
-  );
+    var(--ramp-4), var(--ramp-5), var(--ramp-6));
 }
-.legend-end { color: var(--ink); }
+.legend-end { color: var(--ink); font-weight: 500; }
 
 .map-tooltip {
   position: absolute;
   pointer-events: none;
   z-index: 2;
   max-width: 15rem;
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.65rem;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
-  font-size: 0.82rem;
-  line-height: 1.35;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  box-shadow: var(--shadow-lift);
 }
 .map-tooltip strong { display: block; }
 .map-tooltip .tooltip-metric { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-.map-help { position: absolute; left: 0.75rem; top: 0.6rem; margin: 0; }
+/* ------------------------------------------------------- results and state */
+
+.results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+}
+
+.empty h2, .error h2 { margin-bottom: 0.35rem; }
+.empty p { color: var(--muted); max-width: 62ch; font-size: 0.88rem; }
+
+.guide-title {
+  margin: 1.3rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.3rem;
+}
+.guide-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  background: var(--panel-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.guide-row:hover { border-color: var(--accent); }
+.guide-name { color: var(--ink); font-size: 0.83rem; font-weight: 500; }
+.guide-levels {
+  color: var(--muted);
+  font-size: 0.73rem;
+  white-space: nowrap;
+}
+.guide-levels.warn { color: var(--warn); }
+
+.error { border-color: var(--warn-line); background: var(--warn-bg); }
+.error h2 { color: var(--warn); }
+.error p + p { margin-top: 0.3rem; }
+
+.table-scroll { overflow-x: auto; margin: 0 -1.05rem -1.05rem; padding: 0 1.05rem; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; white-space: nowrap; }
+th {
+  position: sticky;
+  top: 0;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line-strong);
+}
+td { border-bottom: 1px solid var(--line); }
+tbody tr:last-child td { border-bottom: none; }
+td.numeric, th.numeric { text-align: right; }
+td.rank { color: var(--muted); font-size: 0.8rem; width: 2.5rem; }
+td.name { font-weight: 500; }
 
 /* Only the single-query table drives the globe from a row click. The compare
-   tables have no click handler, so they must not borrow this table's pointer
-   cursor and hover highlight - that affordance would promise a click does
-   something. */
+   tables have no click handler, so they must not borrow the pointer cursor and
+   hover highlight - that affordance would promise a click does something. */
 #results tbody tr { cursor: pointer; }
-#results tbody tr.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-#results tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+#results tbody tr:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+#results tbody tr.selected { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+#results tbody tr.selected td.name { color: var(--accent); }
 
-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-td.numeric, th.numeric { text-align: right; }
+/* ------------------------------------------------------------ compare mode */
 
-details { margin-top: 1.25rem; padding: 0.75rem 1.25rem; }
-summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
-pre { overflow-x: auto; font-size: 0.85rem; }
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  gap: 1.1rem;
+}
+.compare-column { min-width: 0; }
+
+/* --------------------------------------------------------------- details */
+
+#filter-panel { padding: 0.7rem 1.05rem; }
+#filter-panel[open] { padding-bottom: 1rem; }
+summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }
+pre {
+  overflow-x: auto;
+  margin: 0.7rem 0 0;
+  padding: 0.7rem;
+  background: var(--panel-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* A spinning globe and a sliding panel are exactly what this setting is for. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; }
+}
