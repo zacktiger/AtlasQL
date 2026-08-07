@@ -253,6 +253,50 @@ def test_parse_endpoint_rejects_empty_text(schema):
     assert response.status_code == 422
 
 
+def test_credentials_are_resolved_once_not_per_request(monkeypatch):
+    """/metadata asks whether the parser is configured on every page load.
+
+    Resolving credentials means constructing an SDK client, which measured
+    371 ms, so doing it per request made /metadata slower than any query the
+    engine can run. It must be resolved once and remembered.
+    """
+    calls = []
+
+    def counted():
+        calls.append(1)
+        return object(), None
+
+    monkeypatch.setattr(parser, "_resolve_client", counted)
+    parser._forget_client()
+
+    assert parser.is_configured() is True
+    assert parser.is_configured() is True
+    assert parser._client() is not None
+    assert len(calls) == 1, "credentials were re-resolved on a later call"
+
+    parser._forget_client()
+
+
+def test_missing_credentials_are_remembered_and_still_reported(monkeypatch):
+    """A negative answer is cached too — and stays a ParserUnavailable, so the
+    endpoint keeps answering 503 rather than pretending the feature exists."""
+    calls = []
+
+    def counted():
+        calls.append(1)
+        return None, parser.ParserUnavailable("no credentials here")
+
+    monkeypatch.setattr(parser, "_resolve_client", counted)
+    parser._forget_client()
+
+    assert parser.is_configured() is False
+    with pytest.raises(parser.ParserUnavailable):
+        parser._client()
+    assert len(calls) == 1
+
+    parser._forget_client()
+
+
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason="live parse needs ANTHROPIC_API_KEY",

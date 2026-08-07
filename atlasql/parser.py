@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 import psycopg
@@ -137,8 +139,25 @@ def build_tool(metric_names: list[str]) -> dict[str, Any]:
     }
 
 
-def _client():
-    """Build an Anthropic client, or explain why we cannot.
+# Constructing the SDK client resolves credentials, which measured 371 ms — it
+# looks beyond the environment variable for a CLI profile and federated
+# credentials. /metadata calls is_configured() on every page load just to decide
+# whether to show the natural language box, so paying that per request made the
+# frontend's first fetch four times slower than every query it can run.
+#
+# The client is cached instead. It is reusable and thread-safe, so this also
+# gives /parse a warm HTTP connection pool rather than a fresh one per parse.
+# The TTL exists for the one case where the answer can change under a running
+# process: a developer running `ant auth login` mid-session. In a deployment
+# credentials come from the environment and are fixed until the process
+# restarts, so this only ever re-resolves an answer that cannot have changed.
+_CREDENTIAL_TTL_S = 60.0
+_credential_lock = threading.Lock()
+_cached_client: tuple[float, Any | None, ParserUnavailable | None] | None = None
+
+
+def _resolve_client():
+    """Construct a client, or the ParserUnavailable explaining why not.
 
     The SDK constructs happily with no credentials and only fails when it comes
     to build the request headers, so constructing is not a check. The resolved
@@ -149,18 +168,45 @@ def _client():
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover - dependency is in requirements
-        raise ParserUnavailable("the anthropic package is not installed") from exc
+        return None, ParserUnavailable("the anthropic package is not installed")
 
     client = anthropic.Anthropic()
     if not any(
         getattr(client, attribute, None)
         for attribute in ("api_key", "auth_token", "credentials")
     ):
-        raise ParserUnavailable(
+        return None, ParserUnavailable(
             "no Anthropic credentials available; set ANTHROPIC_API_KEY to enable "
             "natural language queries"
         )
+    return client, None
+
+
+def _client():
+    """The cached Anthropic client, or raise ParserUnavailable."""
+    global _cached_client
+    now = time.monotonic()
+    with _credential_lock:
+        cached = _cached_client
+        if cached is not None and now - cached[0] < _CREDENTIAL_TTL_S:
+            if cached[2] is not None:
+                raise cached[2]
+            return cached[1]
+
+    client, unavailable = _resolve_client()
+
+    with _credential_lock:
+        _cached_client = (now, client, unavailable)
+    if unavailable is not None:
+        raise unavailable
     return client
+
+
+def _forget_client() -> None:
+    """Drop the cached client, so a test can change the environment."""
+    global _cached_client
+    with _credential_lock:
+        _cached_client = None
 
 
 def _translate(exc: Exception) -> Exception:

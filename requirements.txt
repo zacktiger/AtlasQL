@@ -1,5 +1,6 @@
 # Database
 psycopg[binary]==3.2.9
+psycopg-pool==3.2.6
 SQLAlchemy==2.0.41
 
 # Geospatial ETL

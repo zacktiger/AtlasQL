@@ -125,6 +125,47 @@ def test_basemap_rejects_a_level_that_does_not_exist(client):
     assert client.get("/geometry/basemap?level=province").status_code == 422
 
 
+def test_basemap_is_cached_but_keyed_on_the_geometry_digest(client):
+    """The cache must be invisible: same bytes, and a reimport busts it.
+
+    Building the basemap is the expensive part, so it is held in memory. What
+    must not happen is the cache outliving the boundaries — so it is keyed on
+    the same digest the ETag uses, and a digest that no longer matches is a
+    miss rather than a stale hit.
+    """
+    from atlasql.api import _BASEMAP_CACHE
+
+    _BASEMAP_CACHE.clear()
+    cold = client.get("/geometry/basemap?level=country")
+    warm = client.get("/geometry/basemap?level=country")
+    assert cold.status_code == warm.status_code == 200
+    assert cold.content == warm.content
+    assert cold.headers["etag"] == warm.headers["etag"]
+
+    # A cached entry whose digest no longer matches is not served. Simulating
+    # the reimport by poisoning the stored digest is enough to show the check
+    # is the digest and not merely the key.
+    key, entry = next(iter(_BASEMAP_CACHE._entries.items()))
+    assert _BASEMAP_CACHE.get(key, entry.digest) is entry
+    assert _BASEMAP_CACHE.get(key, "a-different-digest") is None
+
+
+def test_basemap_serves_identical_json_compressed_or_not(client):
+    """The stored gzip and the stored bytes must decode to the same map."""
+    _ = client.get("/geometry/basemap?level=country")
+    plain = client.get(
+        "/geometry/basemap?level=country", headers={"Accept-Encoding": "identity"}
+    )
+    assert plain.status_code == 200
+    # httpx transparently decompresses, so comparing parsed JSON compares what
+    # a browser would actually draw on each path.
+    gzipped = client.get(
+        "/geometry/basemap?level=country", headers={"Accept-Encoding": "gzip"}
+    )
+    assert gzipped.headers.get("content-encoding") == "gzip"
+    assert gzipped.json() == plain.json()
+
+
 def test_too_many_ids_is_refused(client):
     ids = ",".join(str(i) for i in range(geometry.MAX_IDS + 1))
     response = client.get(f"/geometry?ids={ids}")

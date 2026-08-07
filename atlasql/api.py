@@ -8,8 +8,13 @@ a code change or a frontend deploy.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
+import threading
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
@@ -22,10 +27,45 @@ from atlasql.models import GeoFilter, QueryResult
 
 log = logging.getLogger(__name__)
 
+def _warm() -> None:
+    """Pay the first-request costs before a user arrives.
+
+    A cold process spends about 2.8 s on its first basemap — opening the pool,
+    importing the driver, building and compressing half a megabyte of outlines —
+    and about 1.9 s on its first /metadata, almost all of it resolving Anthropic
+    credentials. Both are once per process, and on a platform that stops idle
+    instances the unlucky user paying them is a real one.
+
+    Best-effort by design: it runs on a daemon thread so startup never blocks,
+    and every failure is logged and dropped. A database that is not up yet must
+    not stop the app from booting — the endpoints will report that themselves,
+    with a better error than a failed startup would give.
+    """
+    try:
+        with db.connect() as conn:
+            level, tolerance = config.WARM_BASEMAP_LEVEL, config.WARM_BASEMAP_TOLERANCE
+            digest = geometry.basemap_digest(conn, level, tolerance)
+            collection = geometry.basemap(conn, level, tolerance)
+            _BASEMAP_CACHE.put((level, tolerance), _CachedBasemap.build(digest, collection))
+        parser.is_configured()
+        log.info("warmed the connection pool, the %s basemap and credentials", level)
+    except Exception as exc:  # noqa: BLE001 - warming must never break startup
+        log.warning("warm-up skipped: %s", exc)
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    if config.WARM_ON_STARTUP:
+        threading.Thread(target=_warm, name="atlasql-warm", daemon=True).start()
+    yield
+    db.close_pool()
+
+
 app = FastAPI(
     title="AtlasQL",
     description="A query engine over the world's administrative hierarchy.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 # GeoJSON is repetitive text and compresses about four to one. Without this the
@@ -68,6 +108,64 @@ class ParseResult(BaseModel):
     # The filter is returned for review, never executed here. Running it is a
     # separate, explicit /query call.
     filter: GeoFilter
+
+
+@dataclass(frozen=True)
+class _CachedBasemap:
+    """One built basemap, stored both ways so neither is recomputed."""
+
+    digest: str
+    raw: bytes
+    gzipped: bytes
+
+    @classmethod
+    def build(cls, digest: str, collection: dict) -> _CachedBasemap:
+        raw = json.dumps(collection, separators=(",", ":")).encode()
+        return cls(digest=digest, raw=raw, gzipped=gzip.compress(raw, 6))
+
+
+class _BasemapCache:
+    """Tiny LRU of built basemaps, keyed by (level, tolerance).
+
+    Bounded on both axes because tolerance is a caller-supplied float, so the
+    key space is effectively unbounded and an entry can be large: the country
+    tier is half a megabyte at the tolerance the UI asks for, and a request for
+    full resolution at a fine tier is tens of megabytes. Oversized payloads are
+    served but not stored, which keeps the ceiling on resident memory a
+    property of this class rather than of what a client chose to ask for.
+    """
+
+    MAX_ENTRIES = 4
+    MAX_ENTRY_BYTES = 8 * 1024 * 1024
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[str, float], _CachedBasemap] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[str, float], digest: str) -> _CachedBasemap | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            # A digest mismatch means an ETL run replaced the geometry under us.
+            if entry is None or entry.digest != digest:
+                return None
+            self._entries.move_to_end(key)
+            return entry
+
+    def put(self, key: tuple[str, float], entry: _CachedBasemap) -> None:
+        if len(entry.raw) > self.MAX_ENTRY_BYTES:
+            return
+        with self._lock:
+            self._entries[key] = entry
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.MAX_ENTRIES:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_BASEMAP_CACHE = _BasemapCache()
 
 
 @app.exception_handler(query.QueryError)
@@ -177,18 +275,38 @@ def basemap_geometry(
     map disagreeing with the table beside it is exactly the kind of silent
     wrongness this codebase avoids elsewhere. An ETag costs one round trip and
     makes the repeat case a 304.
+
+    Building the payload is the expensive part — simplifying 258 country
+    polygons and serialising them measured 516 ms, plus 37 ms to gzip — so it
+    is cached in the process against the digest. The digest is still computed
+    per request, from the raw geometry, exactly as before: the 28 ms that costs
+    is what keeps the guarantee above intact, and a reimport invalidates the
+    cache on the very next request rather than after some timeout.
     """
     if level not in config.LEVELS:
         raise HTTPException(status_code=422, detail=f"unknown level: {level}")
+
+    tolerance = geometry.clamp_tolerance(tolerance)
     with db.connect() as conn:
-        etag = f'"{geometry.basemap_digest(conn, level, tolerance)}"'
+        digest = geometry.basemap_digest(conn, level, tolerance)
+        etag = f'"{digest}"'
         headers = {"ETag": etag, "Cache-Control": "no-cache"}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
-        collection = geometry.basemap(conn, level, tolerance)
 
-    payload = json.dumps(collection, separators=(",", ":"))
-    return Response(payload, media_type="application/json", headers=headers)
+        entry = _BASEMAP_CACHE.get((level, tolerance), digest)
+        if entry is None:
+            collection = geometry.basemap(conn, level, tolerance)
+            entry = _CachedBasemap.build(digest, collection)
+            _BASEMAP_CACHE.put((level, tolerance), entry)
+
+    # Starlette's GZipMiddleware leaves a response that already declares an
+    # encoding alone, so serving the stored gzip skips recompressing an
+    # unchanged half-megabyte on every page load.
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        headers["Content-Encoding"] = "gzip"
+        return Response(entry.gzipped, media_type="application/json", headers=headers)
+    return Response(entry.raw, media_type="application/json", headers=headers)
 
 
 @app.post("/parse", response_model=ParseResult)
