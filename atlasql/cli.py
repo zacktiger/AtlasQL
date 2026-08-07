@@ -73,6 +73,63 @@ def _refresh_availability(_: argparse.Namespace) -> None:
     availability.refresh()
 
 
+def _serving_size(_: argparse.Namespace) -> None:
+    """Report what a deployed database actually has to hold.
+
+    Most of a built AtlasQL database is HydroRIVERS staging — 8.5 million line
+    segments the rivers job aggregates against and nothing reads afterwards. It
+    is worth knowing that number before paying to host it, because the tables
+    the API reads are a small fraction of the total and fit on tiers the whole
+    database does not.
+    """
+    from atlasql.etl import rivers
+
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.relname AS name,
+                   pg_total_relation_size(c.oid) AS bytes,
+                   pg_size_pretty(pg_total_relation_size(c.oid)) AS pretty
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'r'
+            ORDER BY pg_total_relation_size(c.oid) DESC
+            """
+        ).fetchall()
+
+    served, staged = 0, 0
+    print(f"{'table':<28}{'size':>12}   read by the API?")
+    print("-" * 62)
+    for row in rows:
+        is_staging = row["name"] == rivers.STAGING_TABLE
+        # spatial_ref_sys is PostGIS's own; it comes with the extension rather
+        # than with a dump of ours.
+        is_postgis = row["name"] == "spatial_ref_sys"
+        if is_staging:
+            staged += row["bytes"]
+        elif not is_postgis:
+            served += row["bytes"]
+        note = "no - ETL staging" if is_staging else ("postgis" if is_postgis else "yes")
+        print(f"{row['name']:<28}{row['pretty']:>12}   {note}")
+
+    print("-" * 62)
+    print(f"{'needed to serve':<28}{_human(served):>12}")
+    print(f"{'ETL staging, excludable':<28}{_human(staged):>12}")
+    print(
+        "\nDump only what is served with:\n"
+        f"  pg_dump --no-owner --no-privileges --exclude-table={rivers.STAGING_TABLE} "
+        "-Fc <source-url> > atlasql.dump"
+    )
+
+
+def _human(n: int) -> str:
+    for unit in ("B", "kB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GB"
+
+
 # name -> (handler, help, takes --level)
 COMMANDS = {
     "init-db": (_init_db, "Apply the SQL schema (idempotent)", False),
@@ -114,6 +171,11 @@ COMMANDS = {
     "refresh-availability": (
         _refresh_availability,
         "Recompute metric_availability from what is actually stored",
+        False,
+    ),
+    "serving-size": (
+        _serving_size,
+        "Report which tables a deployment must carry, and how big they are",
         False,
     ),
 }

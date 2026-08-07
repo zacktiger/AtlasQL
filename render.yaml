@@ -1,0 +1,39 @@
+# Render Blueprint: the API and its database in one file.
+#
+#   1. Push this repo to GitHub.
+#   2. Render dashboard -> New -> Blueprint -> pick the repo.
+#   3. When the database is up, load it (see DEPLOYING.md):
+#        pg_restore --no-owner --no-privileges -d "<external connection string>" atlasql.dump
+#
+# The app image carries no ETL: the database is built from a checkout and
+# restored here. See DEPLOYING.md for making the dump.
+#
+# `basic-256mb` is the smallest paid Postgres. The free plan would also hold
+# this database — the serving tables restore to about 78 MB against a 1 GB cap —
+# but Render deletes a free database 30 days after creation, which is a bad
+# surprise for something you intend to keep. If you want free and permanent,
+# point DATABASE_URL at Neon or Supabase instead and delete the databases block.
+
+services:
+  - type: web
+    name: atlasql
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: atlasql-db
+          property: connectionString
+      # Set this in the dashboard to enable the natural language box. Without
+      # it /parse reports itself unconfigured and everything else works.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+databases:
+  - name: atlasql-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    diskSizeGB: 1

@@ -1,0 +1,22 @@
+# Downloaded ETL archives — gigabytes, and the app never reads them.
+data/
+
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.playwright-mcp/
+.claude/
+.vscode/
+
+# Local secrets must never end up in an image layer.
+.env
+
+tests/
+*.md
+!frontend/vendor/README.md
+docker-compose.yml
+requirements.txt

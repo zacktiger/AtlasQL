@@ -1,7 +1,10 @@
+# Everything: the ETL jobs and the API. To run only the API, use
+# requirements-serve.txt, which omits the geospatial stack below — the app
+# serves geometry computed by PostGIS and imports none of it.
+
 # Database
 psycopg[binary]==3.2.9
 psycopg-pool==3.2.6
-SQLAlchemy==2.0.41
 
 # Geospatial ETL
 geopandas==1.1.1

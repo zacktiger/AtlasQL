@@ -1,0 +1,22 @@
+# What the API needs to serve. Not what the ETL needs to build the database.
+#
+# Nothing on the serving path imports geopandas, rasterio, rasterstats, shapely,
+# pyogrio or pandas — those belong to the import jobs, which run once against a
+# database and are not part of a deployed app. Splitting them out takes the
+# container from roughly 1.2 GB to under 200 MB and removes the GDAL/GEOS/PROJ
+# build from every deploy. The geometry the API serves is computed by PostGIS
+# inside the database, which is why the app itself needs no geospatial stack.
+#
+# Use requirements.txt instead for anything that runs `python -m atlasql.cli`.
+
+psycopg[binary]==3.2.9
+psycopg-pool==3.2.6
+
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+
+# /parse only. Without ANTHROPIC_API_KEY the endpoint reports itself
+# unconfigured and the rest of the app is unaffected, but the import must
+# still resolve.
+anthropic==0.120.2
