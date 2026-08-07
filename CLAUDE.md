@@ -106,9 +106,9 @@ real time:
   way: an import of any of those from `atlasql/api.py`, `query.py`, `geometry.py`
   or `db.py` quadruples the container. The `Dockerfile` builds serving only.
 - **`hydrorivers_segments` is ETL staging and must never be read at serving
-  time.** It is 1.27 GB of the 1.36 GB database; excluding it gives a 27 MB dump
-  that restores to 78 MB and fits a free Postgres tier. `serving-size` reports
-  the split.
+  time.** With `hydrorivers_staging_state` beside it, excluding both gives a
+  27 MB dump that restores to 78 MB and fits a free Postgres tier.
+  `serving-size` reports the split and prints the exact pg_dump line.
 
 ## Performance decisions that are load-bearing
 
@@ -190,6 +190,7 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
 ## Domain gotchas
 
 - **River counting**: HydroRIVERS stores rivers as many segments. Group by main-stem ID before counting or one river counts as dozens.
+- **Only major rivers are staged.** HydroRIVERS is modelled from flow accumulation, so Strahler orders 1 to 4 are computed headwater and ephemeral channels — 94% of its 8.5 million segments and 95% of its length. The ETL stages order 5 and above only: 510,179 rows and 77 MB instead of 1.27 GB. `MAJOR_ORDER` in `etl/rivers.py` is both the staging threshold and the reporting one, and lowering it must invalidate what is staged — `hydrorivers_staging_state.min_order` is what detects that. Note that staging is resumed by *features scanned*, not rows stored, because a filtered load's row count no longer says how far through the source file it got. Total modelled drainage is deliberately no longer a metric: `river_length_km` was retired rather than redefined, since keeping the name while changing what it measures would silently change what a threshold means.
 - **Elevation**: expose mean, min, and max as three separate metrics rather than picking one canonical "elevation".
 - **Cities** are point data (GeoNames), not polygons, so raster zonal statistics and polygon intersection do not apply the same way as for the polygon tiers.
 - **Ratio metrics cannot be zonal-averaged.** GDP per capita is output over

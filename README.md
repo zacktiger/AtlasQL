@@ -158,9 +158,9 @@ is the intended answer, not an empty result set.
 | Tier | Regions | Metrics |
 |---|---|---|
 | Continent | 7 | none yet |
-| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), river length, major rivers |
-| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), river length, major rivers |
-| City | 34,021 | GDP per capita (PPP), population, elevation (mean) |
+| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers |
+| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers |
+| City | 34,026 | GDP per capita (PPP), population, elevation (mean) |
 
 The gaps are the interesting part, and each one is a named refusal rather than
 an empty table:
@@ -178,6 +178,14 @@ an empty table:
   and a country's states differ only by how population is spread. Coverage
   percentage cannot express that, so it is in the metric description that
   `/metadata` serves.
+- **River metrics count major rivers only** — Strahler stream order 5 and above.
+  HydroRIVERS is modelled from flow accumulation, so its lower orders are
+  computed headwater and ephemeral channels: orders 1 to 4 are 94% of its
+  segments and 95% of its length. Including them made "total river length" a
+  number dominated by drainage nobody has ever seen (3.9 million km for the
+  largest country, against 233,000 km of actual named-river network) and cost
+  1.27 GB of staging to produce. There is no metric for total modelled drainage;
+  if you want one back it is a threshold change, not a new source.
 - **River metrics** stop at the state tier. Cities are points; a point contains
   no rivers.
 - **Elevation minimum and maximum** stop at the state tier too. A point has no
@@ -214,14 +222,21 @@ tests/                  pytest; DB- and API-key-dependent tests self-skip
 
 ## Disk footprint and starting over
 
-A full local checkout is roughly 8-9 GB, almost none of it source:
+A full local checkout is roughly 4 GB, almost none of it source:
 
 | What | Size | Recoverable from |
 |---|---|---|
-| Source + docs | ~0.5 MB | `git clone` |
-| `.venv/` | ~400 MB | `pip install -r requirements.txt` |
-| `data/raw/` (gitignored ETL downloads) | ~4.8 GB | re-run the ETL commands above; ~1.6 GB DEM + 0.5 GB HydroRIVERS re-download, the rest re-derives from cache |
-| `atlasql-db` Docker volume (imported database) | ~2.2 GB | `docker compose up -d` then every `import-*` job again |
+| Source + docs | ~1.5 MB | `git clone` |
+| `.venv/` | ~446 MB | `pip install -r requirements.txt` |
+| `data/raw/` (gitignored ETL downloads) | ~2.5 GB | re-run the ETL commands above; ~1.6 GB DEM + 520 MB HydroRIVERS re-download, the rest re-derives from cache |
+| `atlasql-db` Docker volume | ~1.0 GB | `docker compose up -d` then every `import-*` job again |
+
+The database itself is only 167 MB — 208 MB on disk with Postgres's own
+overhead. The rest of that volume is recycled write-ahead log, which Postgres
+holds for reuse and caps at `max_wal_size` (1 GB by default). It shrinks on its
+own as the estimate of future need decays; it is not growth. To reclaim it now,
+dump and recreate the volume — which is the same dump you need for a deploy
+anyway, so see `DEPLOYING.md`.
 
 None of it is irreplaceable — GitHub is always the full source of truth — but
 **a restore is not just `git clone`.** After a fresh clone the database is

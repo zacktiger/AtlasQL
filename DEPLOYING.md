@@ -16,10 +16,11 @@ it on a separate static host is possible but is a net loss — see "Why the
 frontend does not go on Vercel" at the end.
 
 The important number: **the tables the API reads restore to about 78 MB, from a
-27 MB dump.** A fully built AtlasQL database is 1.36 GB, but 1.27 GB of that is
-`hydrorivers_segments`, the 8.5 million HydroRIVERS line segments the rivers ETL
-aggregates against and nothing reads afterwards. Excluding it puts this app
-inside the free tier of every Postgres host below. Check yours:
+27 MB dump.** A built AtlasQL database is 167 MB, of which 77 MB is
+`hydrorivers_segments` — the staged river segments the rivers ETL aggregates
+against and nothing reads afterwards — plus a small bookkeeping table beside it.
+Excluding both puts this app inside the free tier of every Postgres host below.
+Check yours:
 
 ```bash
 python -m atlasql.cli serving-size
@@ -32,7 +33,8 @@ From a checkout with a built database:
 ```bash
 # Against the docker-compose database
 docker exec atlasql-db pg_dump -U atlasql -d atlasql \
-  --no-owner --no-privileges --exclude-table=hydrorivers_segments \
+  --no-owner --no-privileges \
+  --exclude-table=hydrorivers_segments --exclude-table=hydrorivers_staging_state \
   -Fc -f /tmp/atlasql.dump
 docker cp atlasql-db:/tmp/atlasql.dump ./atlasql.dump
 ```
@@ -168,8 +170,9 @@ Only `DATABASE_URL` is required. `ATLASQL_DATABASE_URL` overrides it, so a local
 - **PostGIS must exist before the restore.** The dump creates the extension, but
   the host has to offer it. On Fly it is a checkbox at cluster creation and
   cannot be added later.
-- **Do not restore the whole database.** Without `--exclude-table`, you are
-  moving 1.36 GB — and paying to store an ETL staging table the app never reads.
+- **Do not restore the whole database.** Without `--exclude-table`, you carry
+  the staged river segments too — an ETL table the app never reads, and one you
+  would then be paying a host to store.
 - **Re-running the ETL against production is not the plan.** The import jobs
   download gigabytes and take tens of minutes. Build locally, dump, restore.
 - **Idle instances sleep.** On Render's free tier the first request after 15

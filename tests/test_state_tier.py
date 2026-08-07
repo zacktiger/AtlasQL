@@ -15,7 +15,7 @@ from atlasql import query
 from atlasql.models import Condition, GeoFilter
 
 ELEVATION = "elevation_mean"
-RIVERS = "river_length_km"
+RIVERS = "major_river_length_km"
 GDP = "gdp_per_capita"
 
 

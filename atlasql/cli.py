@@ -97,11 +97,12 @@ def _serving_size(_: argparse.Namespace) -> None:
             """
         ).fetchall()
 
+    staging_tables = {rivers.STAGING_TABLE, rivers.STATE_TABLE}
     served, staged = 0, 0
     print(f"{'table':<28}{'size':>12}   read by the API?")
     print("-" * 62)
     for row in rows:
-        is_staging = row["name"] == rivers.STAGING_TABLE
+        is_staging = row["name"] in staging_tables
         # spatial_ref_sys is PostGIS's own; it comes with the extension rather
         # than with a dump of ours.
         is_postgis = row["name"] == "spatial_ref_sys"
@@ -115,9 +116,10 @@ def _serving_size(_: argparse.Namespace) -> None:
     print("-" * 62)
     print(f"{'needed to serve':<28}{_human(served):>12}")
     print(f"{'ETL staging, excludable':<28}{_human(staged):>12}")
+    excludes = " ".join(f"--exclude-table={name}" for name in sorted(staging_tables))
     print(
         "\nDump only what is served with:\n"
-        f"  pg_dump --no-owner --no-privileges --exclude-table={rivers.STAGING_TABLE} "
+        f"  pg_dump --no-owner --no-privileges {excludes} "
         "-Fc <source-url> > atlasql.dump"
     )
 
