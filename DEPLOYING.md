@@ -7,6 +7,14 @@ Two things ship, and they are very different sizes:
 - **The database** — PostgreSQL with PostGIS, holding the regions and metrics.
   You build it once locally and copy it up.
 
+**There is no third thing.** The frontend is not a separate deployment: it is
+four static files and two vendored d3 modules, 156 KB in total, with no build
+step and no framework, served by the app itself from `/`. Every request it makes
+is a same-origin relative path (`/metadata`, `/query`, `/geometry`), and there is
+no CORS middleware anywhere in the app because none has ever been needed. Putting
+it on a separate static host is possible but is a net loss — see "Why the
+frontend does not go on Vercel" at the end.
+
 The important number: **the tables the API reads restore to about 78 MB, from a
 27 MB dump.** A fully built AtlasQL database is 1.36 GB, but 1.27 GB of that is
 `hydrorivers_segments`, the 8.5 million HydroRIVERS line segments the rivers ETL
@@ -56,7 +64,56 @@ one dashboard and one bill, use the Render blueprint with the paid database.
 
 ## 3. Deploy
 
-### Render (blueprint)
+### Neon + Render (recommended)
+
+Neon holds the database, Render runs the app. Neon's free tier is 0.5 GB and does
+not expire, which is the reason to prefer it over Render's own free Postgres —
+that one is deleted 30 days after creation.
+
+**a. Create the database.** Sign up at neon.tech, create a project on Postgres
+16, and enable PostGIS in their SQL editor:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+```
+
+**b. Load it.** Neon gives you two connection strings; use the **direct** one
+(no `-pooler` in the host) for the restore — a restore is one long session and
+gains nothing from a transaction pooler.
+
+```bash
+pg_restore --no-owner --no-privileges -d "postgresql://…neon.tech/neondb?sslmode=require" atlasql.dump
+```
+
+Then check it landed:
+
+```bash
+psql "postgresql://…neon.tech/neondb?sslmode=require" \
+  -c "SELECT level, count(*) FROM regions GROUP BY level ORDER BY 1;"
+```
+
+You should see 7 continents, 258 countries, 4,596 states and 34,026 cities.
+
+**c. Deploy the app.** In this repo, delete the `databases:` block from
+`render.yaml` (Neon is the database now), then Render → **New** → **Blueprint** →
+pick the repo. Set `DATABASE_URL` in the dashboard to the Neon connection
+string. Either Neon string works here — the app runs its own connection pool, so
+the pooled endpoint buys nothing, and the direct one is one less hop.
+
+**d. Optional.** Set `ANTHROPIC_API_KEY` to enable `/parse`. Leave it unset and
+the natural-language box stays hidden; nothing else changes.
+
+Two Neon behaviours worth knowing, both already handled:
+
+- **It scales to zero.** After idle, the first query waits a few hundred
+  milliseconds for the compute to wake. The app warms its caches at boot, so
+  this shows up once rather than on every cold page.
+- **It drops idle connections.** The pool checks a connection before handing it
+  out and recycles anything idle for more than 180 seconds
+  (`ATLASQL_POOL_MAX_IDLE_S`), which is what keeps that from surfacing as an
+  intermittent 500.
+
+### Render (blueprint, with Render's own Postgres)
 
 1. Push this repo to GitHub.
 2. Render → **New** → **Blueprint** → select the repo. `render.yaml` creates the
@@ -122,3 +179,34 @@ Only `DATABASE_URL` is required. `ATLASQL_DATABASE_URL` overrides it, so a local
   the container; those need `requirements.txt` and a checkout.
 - **Connection limits.** `ATLASQL_POOL_MAX_SIZE` is per instance. Two instances
   at 8 is 16 connections, which is real money on a small managed Postgres.
+
+## Why the frontend does not go on Vercel
+
+Vercel is the right answer when there is a frontend build to run and a bundle to
+push to a CDN. There is neither here. `frontend/` is 156 KB of hand-written
+HTML, CSS and two JS modules, plus d3-geo and d3-array checked in — no npm, no
+bundler, no framework, nothing to compile. The app already serves it with ETags
+and `Cache-Control: no-cache`, so a repeat visit is a 304, and it is gzipped by
+the same middleware as everything else.
+
+Splitting it onto a separate origin costs three things and returns none:
+
+1. **CORS becomes mandatory.** The app has no CORS middleware, because the
+   frontend has always been same-origin. You would add one and then own the
+   allowed-origins list forever.
+2. **The API base stops being implicit.** Every call is a relative path today
+   (`fetch("/query")`). On another origin they all need an absolute base, which
+   means a build-time or runtime config value, which means the frontend now has
+   configuration and an environment where it can be wrong.
+3. **Two deploys can disagree.** `index.html` on Vercel against an older `app.js`
+   on Render is exactly the silent version-skew the `no-cache` headers were added
+   to prevent, except now it spans two providers.
+
+You would be adding a deployment surface, a config surface and a failure mode to
+serve 156 KB that the app is already serving correctly.
+
+If you want Vercel anyway — for a custom domain, or to put a CDN in front — the
+honest way is to point Vercel at the Render app as a rewrite target rather than
+hosting the files separately, which keeps one origin and changes nothing in the
+code. Custom domains are also available directly on Render, which is simpler
+still.
