@@ -47,6 +47,28 @@ const MIN_FIT_RADIANS = 0.06;
 // by the curve of the globe that calling it visible would be a lie.
 const VISIBLE_LIMIT = (80 * Math.PI) / 180;
 
+// Interaction level of detail.
+//
+// Redrawing the world basemap is essentially the entire cost of a frame: 57 ms
+// against 0.2 ms for the ocean disc and 2 ms for the graticule, which is 17 fps
+// while dragging. The cost is projecting every vertex, so neither d3's
+// resampling precision nor a coarser server-side tolerance moves it much —
+// ST_SimplifyPreserveTopology refuses to collapse a polygon out of existence, so
+// even at the maximum tolerance the count only falls from 30,087 vertices to
+// 22,425. Almost all of those vertices are in specks: 258 countries, but
+// thousands of tiny islands.
+//
+// So the draft drops rings below half a degree across rather than simplifying
+// them further, which is the one thing that actually works: 30,087 vertices to
+// 12,511, and 57 ms to 16 ms — 61 fps. It is drawn only while the camera is
+// moving, and the full basemap comes back once it settles. What you lose during
+// a drag is islands smaller than the gap between two graticule lines, in motion.
+const DRAFT_MIN_SPAN_DEGREES = 0.5;
+
+// Long enough that a pause between two drag gestures does not flash the full
+// basemap, short enough to feel like the map sharpens as you let go.
+const SETTLE_MS = 120;
+
 function clamp(value, low, high) {
   return Math.min(high, Math.max(low, value));
 }
@@ -67,6 +89,9 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
   const graticule = window.d3.geoGraticule10();
 
   let basemap = null;
+  let basemapDraft = null;
+  let interacting = false;
+  let settleTimer = null;
   let results = [];
   let values = new Map(); // region_id -> numeric value driving the ramp
   let domain = null; // [min, max] of those values
@@ -106,6 +131,74 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
     const [low, high] = domain;
     const t = high > low ? (value - low) / (high - low) : 1;
     return palette.ramp[clamp(Math.round(t * (RAMP_STEPS - 1)), 0, RAMP_STEPS - 1)];
+  }
+
+  // The widest span of a ring's bounding box, in degrees. Cheap, and enough to
+  // tell an island worth drawing at speed from a speck that is not.
+  function ringSpan(ring) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of ring) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    return Math.max(maxX - minX, maxY - minY);
+  }
+
+  // A version of the basemap cheap enough to redraw at 60 fps, for frames where
+  // the camera is moving. Rings smaller than DRAFT_MIN_SPAN_DEGREES are dropped
+  // outright — including interior rings, so a lake or an enclave fills in for
+  // the length of a drag. A feature left with no ring at all is dropped too.
+  function buildDraft(collection) {
+    const features = [];
+    for (const feature of collection.features ?? []) {
+      const geometry = feature.geometry;
+      if (!geometry) continue;
+      const polygons =
+        geometry.type === "Polygon"
+          ? [geometry.coordinates]
+          : geometry.type === "MultiPolygon"
+            ? geometry.coordinates
+            : null;
+      if (!polygons) continue;
+
+      const kept = [];
+      for (const rings of polygons) {
+        if (ringSpan(rings[0]) < DRAFT_MIN_SPAN_DEGREES) continue;
+        kept.push(rings.filter((ring, i) => i === 0 || ringSpan(ring) >= DRAFT_MIN_SPAN_DEGREES));
+      }
+      if (kept.length) {
+        features.push({
+          type: "Feature",
+          properties: feature.properties,
+          geometry: { type: "MultiPolygon", coordinates: kept },
+        });
+      }
+    }
+    return { type: "FeatureCollection", features };
+  }
+
+  // Any camera movement: a drag, a wheel, or a fly. Draws draft frames until
+  // things stop, then one full-detail frame.
+  function beginInteraction() {
+    interacting = true;
+    if (settleTimer) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  }
+
+  function endInteraction() {
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      interacting = false;
+      draw();
+    }, SETTLE_MS);
   }
 
   function resize() {
@@ -151,9 +244,10 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
     ctx.lineWidth = 0.5;
     ctx.stroke();
 
-    if (basemap) {
+    const land = interacting && basemapDraft ? basemapDraft : basemap;
+    if (land) {
       ctx.beginPath();
-      path(basemap);
+      path(land);
       ctx.fillStyle = palette.land;
       ctx.fill();
       ctx.strokeStyle = palette.landLine;
@@ -348,15 +442,24 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
     const deltaLambda = shortestDelta(from.rotation[0], targetRotation[0]);
     const deltaPhi = targetRotation[1] - from.rotation[1];
     const start = performance.now();
+    beginInteraction();
     animation = (now) => {
+      // stopAnimation() clears this while a frame is already queued, and that
+      // frame still runs — passing the now-null reference back to
+      // requestAnimationFrame throws. Grabbing the globe mid-fly is the way in.
+      if (!animation) return;
       const t = easeInOut(clamp((now - start) / FLY_MS, 0, 1));
       rotation = [from.rotation[0] + deltaLambda * t, from.rotation[1] + deltaPhi * t];
       // Interpolating the scale geometrically rather than linearly keeps the
       // apparent zoom rate constant; a linear ramp lurches at the wide end.
       scale = from.scale * Math.pow(targetScale / from.scale, t);
       render();
-      if (t < 1) requestAnimationFrame(animation);
-      else animation = null;
+      if (t < 1) {
+        requestAnimationFrame(animation);
+      } else {
+        animation = null;
+        endInteraction();
+      }
     };
     requestAnimationFrame(animation);
   }
@@ -391,6 +494,7 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
 
   canvas.addEventListener("pointerdown", (event) => {
     stopAnimation();
+    beginInteraction();
     canvas.setPointerCapture(event.pointerId);
     drag = { start: pointerPosition(event), rotation: rotation.slice(), moved: false };
   });
@@ -424,6 +528,7 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
   canvas.addEventListener("pointerup", (event) => {
     const wasDrag = drag?.moved;
     drag = null;
+    endInteraction();
     if (wasDrag) return;
     const feature = featureAt(...pointerPosition(event));
     onSelect?.(feature ? feature.properties.region_id : null);
@@ -431,6 +536,7 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
 
   canvas.addEventListener("pointerleave", () => {
     drag = null;
+    endInteraction();
     if (hoveredId !== null) {
       hoveredId = null;
       draw();
@@ -443,6 +549,10 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
     (event) => {
       event.preventDefault();
       stopAnimation();
+      // A wheel gesture is a burst of discrete events with no "end", so the
+      // settle timer is what ends it.
+      beginInteraction();
+      endInteraction();
       const [x, y] = pointerPosition(event);
       const under = projection.invert([x, y]);
       setScale(scale * Math.exp(-event.deltaY * 0.0015));
@@ -470,8 +580,14 @@ export function createGlobe(canvas, { onSelect, onHover, onCamera } = {}) {
   });
 
   return {
+    // The draft is built once, from the first (coarsest) basemap supplied.
+    // A later, finer basemap replaces what still frames draw but must not
+    // become the draft: the whole point of the draft is to be the cheapest
+    // usable version, and rebuilding it from denser geometry would quietly
+    // give back the frame budget this exists to protect.
     setBasemap(collection) {
       basemap = collection;
+      if (!basemapDraft) basemapDraft = buildDraft(collection);
       draw();
     },
 
