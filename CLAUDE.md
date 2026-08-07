@@ -10,7 +10,9 @@ language into a `GeoFilter` that pre-fills that same form. Phase 5, frontend
 polish, is under way: results now render on an orthographic globe alongside the
 table, fed by a separate `/geometry` endpoint so the `GeoFilter`/`QueryResult`
 contract is untouched. Two design documents govern
-the work; read both before writing anything:
+the work; read both before writing anything. The serving path has since been
+profiled and the frontend rebuilt around the map, and there is a container and a
+deployment guide — see "Deployment" and "Performance decisions" below.
 
 - `high-level-vision.md` — the product vision and long-term direction. Read it when deciding *whether* a design is right.
 - `geo-query-engine-plan.md` — the concrete v1 architecture, schema, data sources, and build order. Read it before starting each phase for the *how*.
@@ -25,6 +27,7 @@ The plan commits to Python + FastAPI + PostgreSQL/PostGIS for the backend and a 
 docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m pip install -r requirements.txt
 .venv/Scripts/python -m atlasql.cli init-db   # apply sql/*.sql, idempotent
+.venv/Scripts/python -m atlasql.cli serving-size  # what a deploy must carry
 .venv/Scripts/python -m atlasql.cli import-natural-earth
 .venv/Scripts/python -m atlasql.cli import-states
 .venv/Scripts/python -m atlasql.cli import-cities
@@ -74,7 +77,14 @@ Once the frontend exists, review it in a real browser every few commits rather t
 
 Catch regressions here before they stack up behind several commits of new work.
 
-Two lessons from building the globe, both of which cost real time:
+Three lessons from building the globe and the page around it, all of which cost
+real time:
+
+- **A simplified basemap has a zoom past which it stops being a map.** Flying to
+  a city used to land where a quarter-degree simplification was a fifth of the
+  visible span, and the coastline rendered as spikes — which reads as a
+  projection bug. `MIN_FIT_RADIANS` is a floor set by the basemap's resolution,
+  not by taste.
 
 - **A screenshot is not enough to check a map.** An inverted polygon fills the
   whole sphere in a colour that looks plausible. Sample the canvas — if the
@@ -84,6 +94,47 @@ Two lessons from building the globe, both of which cost real time:
   `--reload` is not on by default, and a response cached with a freshness
   lifetime is not re-fetched no matter how many times you reload the page. Both
   of those masked a fix that was already correct.
+
+## Deployment
+
+`DEPLOYING.md` is the guide; the two facts that shape it are worth knowing here.
+
+- **Requirements are split.** `requirements-serve.txt` is what the API needs;
+  `requirements.txt` adds the geospatial stack the ETL needs. Nothing on the
+  serving path imports geopandas, rasterio, rasterstats, shapely, pyogrio or
+  pandas — the geometry the API returns is computed by PostGIS. Keep it that
+  way: an import of any of those from `atlasql/api.py`, `query.py`, `geometry.py`
+  or `db.py` quadruples the container. The `Dockerfile` builds serving only.
+- **`hydrorivers_segments` is ETL staging and must never be read at serving
+  time.** It is 1.27 GB of the 1.36 GB database; excluding it gives a 27 MB dump
+  that restores to 78 MB and fits a free Postgres tier. `serving-size` reports
+  the split.
+
+## Performance decisions that are load-bearing
+
+These were measured against the loaded database. Undoing one costs the factor in
+brackets, so change them with a benchmark rather than by inspection.
+
+- **Never construct an Anthropic client per request** [/metadata 435 ms → 6 ms].
+  `parser._client()` caches it. `is_configured()` runs on every page load and
+  resolving credentials costs 371 ms.
+- **Connections come from `db.pool()`**, checked on checkout [21 ms/request].
+- **The basemap payload is cached against the geometry digest** [553 ms → 30 ms].
+  The digest is still recomputed per request, deliberately: that is what keeps a
+  cached basemap from outliving an ETL reimport. Do not cache the digest too.
+- **`build_sql` emits two shapes** [city tier 190 ms → 33 ms]. The parent join
+  goes after the LIMIT, and above `PREFILTER_MIN_REGIONS` each condition adds a
+  redundant EXISTS so the planner starts from the metric index. The pre-filter is
+  a loss on small tiers, which is why it is gated on region count rather than
+  applied always. `tests/test_query_shape.py` is what guarantees the two shapes
+  agree — keep it passing.
+- **JIT is off for the query path only** (`SET LOCAL`), not globally: Postgres
+  spent 172 ms compiling a 130 ms query. The ETL's aggregate over 8.5 million
+  river segments still wants JIT.
+
+A stale cache is only acceptable where staleness cannot change an answer. Region
+counts are cached freely because they only pick between two SQL shapes that
+return identical rows; the basemap is not, because it is the answer.
 
 ## Maintaining the essence of the product
 
