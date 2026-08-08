@@ -43,6 +43,21 @@ class Indicator(NamedTuple):
 # reconciliation, the aggregate filtering and the country join below apply
 # whatever the indicator is.
 INDICATORS: dict[str, Indicator] = {
+    "gdp_nominal": Indicator(
+        code="NY.GDP.MKTP.CD",
+        label="GDP (nominal)",
+        unit="current US$",
+        description=(
+            "Gross domestic product at market prices in current US dollars, "
+            "most recent year available per country (World Bank "
+            "NY.GDP.MKTP.CD). This is the whole economy rather than the figure "
+            "per person, and it is the nominal one: converted at market "
+            "exchange rates, not adjusted for what a dollar buys locally. Use "
+            "gdp_ppp for that comparison, and note the two are in different "
+            "units, so a threshold means different things to each. Country "
+            "level only — the World Bank reports nothing below it."
+        ),
+    ),
     "gdp_per_capita": Indicator(
         code="NY.GDP.PCAP.CD",
         label="GDP per capita",
