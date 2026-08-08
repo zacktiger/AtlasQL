@@ -35,6 +35,7 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m atlasql.cli import-gridded-gdp --level state
 .venv/Scripts/python -m atlasql.cli import-elevation --level country
 .venv/Scripts/python -m atlasql.cli import-rivers --level state
+.venv/Scripts/python -m atlasql.cli import-subregions --level country
 .venv/Scripts/python -m pytest                # DB tests skip if it is not up
 .venv/Scripts/python -m uvicorn atlasql.api:app --reload
 ```
@@ -191,6 +192,19 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
 
 - **River counting**: HydroRIVERS stores rivers as many segments. Group by main-stem ID before counting or one river counts as dozens.
 - **Only major rivers are staged.** HydroRIVERS is modelled from flow accumulation, so Strahler orders 1 to 4 are computed headwater and ephemeral channels — 94% of its 8.5 million segments and 95% of its length. The ETL stages order 5 and above only: 510,179 rows and 77 MB instead of 1.27 GB. `MAJOR_ORDER` in `etl/rivers.py` is both the staging threshold and the reporting one, and lowering it must invalidate what is staged — `hydrorivers_staging_state.min_order` is what detects that. Note that staging is resumed by *features scanned*, not rows stored, because a filtered load's row count no longer says how far through the source file it got. Total modelled drainage is deliberately no longer a metric: `river_length_km` was retired rather than redefined, since keeping the name while changing what it measures would silently change what a threshold means.
+- **Subregion counts are derived from the hierarchy, so they go stale when a
+  region import runs.** `state_count`, `city_count` and `country_count` count
+  descendants through `parent_id` rather than by re-testing geometry, so they
+  always agree with the parent name shown beside a result. They are the one
+  metric family whose input is other ETL jobs' output — run `import-subregions`
+  *after* the region importers, and again after any of them re-runs. It is pure
+  SQL and takes milliseconds, so re-running it is never the expensive choice.
+  They are three metrics rather than one `subregion_count` for the same reason
+  the two GDP metrics stay separate: one name would carry a unit that changes
+  with the level, so `> 30` would mean thirty countries on a continent and
+  thirty states in a country. A tier with *no* regions imported gets no metric
+  written at all — writing `city_count = 0` everywhere would report 100%
+  coverage for a number nobody measured.
 - **Elevation**: expose mean, min, and max as three separate metrics rather than picking one canonical "elevation".
 - **Cities** are point data (GeoNames), not polygons, so raster zonal statistics and polygon intersection do not apply the same way as for the polygon tiers.
 - **Ratio metrics cannot be zonal-averaged.** GDP per capita is output over

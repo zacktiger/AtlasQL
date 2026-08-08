@@ -6,6 +6,7 @@
     python -m atlasql.cli import-world-bank
     python -m atlasql.cli import-gridded-gdp --level state
     python -m atlasql.cli import-elevation --level state
+    python -m atlasql.cli import-subregions --level country
     python -m atlasql.cli refresh-availability
 
 Metric jobs take --level, because the same job computes a tier's metrics
@@ -65,6 +66,12 @@ def _import_rivers(args: argparse.Namespace) -> None:
     from atlasql.etl import rivers
 
     rivers.import_rivers(level=args.level)
+
+
+def _import_subregions(args: argparse.Namespace) -> None:
+    from atlasql.etl import subregions
+
+    subregions.import_subregions(level=args.level)
 
 
 def _refresh_availability(_: argparse.Namespace) -> None:
@@ -132,53 +139,66 @@ def _human(n: int) -> str:
     return f"{n:.1f} GB"
 
 
-# name -> (handler, help, takes --level)
+# Which levels a metric job's --level accepts. Most measure something the world
+# has at a place, and continents are dissolved from countries and carry none of
+# it, so they take every level below that. The subregion counts are the
+# exception: what they measure is the hierarchy itself, which a continent has as
+# much of as anything else, and it is the only level where country_count exists.
+MEASURED_LEVELS = tuple(level for level in config.LEVELS if level != "continent")
+ALL_LEVELS = config.LEVELS
+
+# name -> (handler, help, --level choices or None)
 COMMANDS = {
-    "init-db": (_init_db, "Apply the SQL schema (idempotent)", False),
+    "init-db": (_init_db, "Apply the SQL schema (idempotent)", None),
     "import-natural-earth": (
         _import_natural_earth,
         "Import Natural Earth continents and countries",
-        False,
+        None,
     ),
     "import-states": (
         _import_states,
         "Import Natural Earth states and provinces under their countries",
-        False,
+        None,
     ),
     "import-cities": (
         _import_cities,
         "Import GeoNames cities with population, parented spatially",
-        False,
+        None,
     ),
     "import-world-bank": (
         _import_world_bank,
         "Import World Bank indicators (GDP per capita, population) onto countries",
-        False,
+        None,
     ),
     "import-gridded-gdp": (
         _import_gridded_gdp,
         "Aggregate GDP per capita (PPP) from the Kummu grid for one level",
-        True,
+        MEASURED_LEVELS,
     ),
     "import-elevation": (
         _import_elevation,
         "Compute mean/min/max elevation from GMTED2010 for one level",
-        True,
+        MEASURED_LEVELS,
     ),
     "import-rivers": (
         _import_rivers,
         "Stage HydroRIVERS and aggregate river length/count for one level",
-        True,
+        MEASURED_LEVELS,
+    ),
+    "import-subregions": (
+        _import_subregions,
+        "Count the regions of each lower tier inside each region at one level",
+        ALL_LEVELS,
     ),
     "refresh-availability": (
         _refresh_availability,
         "Recompute metric_availability from what is actually stored",
-        False,
+        None,
     ),
     "serving-size": (
         _serving_size,
         "Report which tables a deployment must carry, and how big they are",
-        False,
+        None,
     ),
 }
 
@@ -189,15 +209,13 @@ def main(argv: list[str] | None = None) -> int:
         "-v", "--verbose", action="store_true", help="log at DEBUG level"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name, (_, help_text, takes_level) in COMMANDS.items():
+    for name, (_, help_text, level_choices) in COMMANDS.items():
         subparser = subparsers.add_parser(name, help=help_text)
-        if takes_level:
+        if level_choices:
             subparser.add_argument(
                 "--level",
                 default="country",
-                # Every level that holds regions with data of its own. Continents
-                # are dissolved from countries and carry no metrics.
-                choices=[level for level in config.LEVELS if level != "continent"],
+                choices=list(level_choices),
                 help="which tier to compute the metric for (default: country)",
             )
 

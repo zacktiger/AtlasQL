@@ -37,12 +37,23 @@ python -m atlasql.cli import-elevation --level country
 python -m atlasql.cli import-elevation --level state
 python -m atlasql.cli import-rivers --level country
 python -m atlasql.cli import-rivers --level state
+python -m atlasql.cli import-subregions --level continent  # how many lower-tier
+python -m atlasql.cli import-subregions --level country    # regions are inside
+python -m atlasql.cli import-subregions --level state      # each region
 python -m atlasql.cli refresh-availability   # every job already does this
 ```
 
 The metric jobs take `--level`, because giving a new tier its metrics is
 running the same job with a different argument. Nothing in the query engine
 knows how many tiers exist.
+
+`import-subregions` goes last, and is the only job that reads what the others
+wrote: it counts descendants down the `parent_id` hierarchy, so re-importing
+regions leaves its numbers stale until it runs again. It touches no source data
+and finishes in milliseconds, so re-running it is cheap. It is also the one job
+that accepts `--level continent`, because what it measures is the hierarchy
+itself and a continent has as much of that as anywhere else — `country_count`
+exists at no other level.
 
 Every job is idempotent and upserts, so re-running is always safe. Source
 archives are cached under `data/raw/` after the first download — around 1.6 GB
@@ -157,9 +168,9 @@ is the intended answer, not an empty result set.
 
 | Tier | Regions | Metrics |
 |---|---|---|
-| Continent | 7 | none yet |
-| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers |
-| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers |
+| Continent | 7 | countries within, states within, cities within |
+| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers, states within, cities within |
+| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers, cities within |
 | City | 34,026 | GDP per capita (PPP), population, elevation (mean) |
 
 The gaps are the interesting part, and each one is a named refusal rather than
@@ -193,6 +204,16 @@ an empty table:
 - **Population** spans city and country but not state, so a query combining it
   with the World Bank GDP figure resolves to country while population alone
   reaches cities.
+- **The subregion counts stop where the thing they count runs out.** A country
+  contains no countries and a state contains no states, so `country_count`
+  exists only on continents and `state_count` only from country up. They are
+  the one metric family that reaches the continent tier, because the hierarchy
+  is the one thing a continent has as much of as anywhere else. `city_count`
+  counts the GeoNames cities15000 set, so it means settlements of 15,000 people
+  or more; zero means none above that floor, not none at all. Counties are not
+  imported, and rather than write `county_count = 0` onto every region — which
+  would report 100% coverage for a number nobody measured — the metric simply
+  does not exist.
 
 ## Tests
 
