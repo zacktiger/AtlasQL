@@ -30,6 +30,7 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m atlasql.cli serving-size  # what a deploy must carry
 .venv/Scripts/python -m atlasql.cli import-natural-earth
 .venv/Scripts/python -m atlasql.cli import-states
+.venv/Scripts/python -m atlasql.cli import-counties
 .venv/Scripts/python -m atlasql.cli import-cities
 .venv/Scripts/python -m atlasql.cli import-world-bank
 .venv/Scripts/python -m atlasql.cli import-gridded-gdp --level state
@@ -121,6 +122,11 @@ brackets, so change them with a benchmark rather than by inspection.
   `parser._client()` caches it. `is_configured()` runs on every page load and
   resolving credentials costs 371 ms.
 - **Connections come from `db.pool()`**, checked on checkout [21 ms/request].
+- **The basemap is pinned to the country tier in the frontend, deliberately.**
+  `fetchBasemap` hardcodes `level=country`; the endpoint accepts any level and
+  `level=county` builds 15 MB in 6.5 s, against 552 KB in 0.8 s for countries.
+  The basemap is context rather than an answer, so it never needs the tier the
+  query ran at. Do not wire it to the result's level.
 - **The basemap payload is cached against the geometry digest** [553 ms → 30 ms].
   The digest is still recomputed per request, deliberately: that is what keeps a
   cached basemap from outliving an ETL reimport. Do not cache the digest too.
@@ -193,6 +199,12 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
 
 - **River counting**: HydroRIVERS stores rivers as many segments. Group by main-stem ID before counting or one river counts as dozens.
 - **Only major rivers are staged.** HydroRIVERS is modelled from flow accumulation, so Strahler orders 1 to 4 are computed headwater and ephemeral channels — 94% of its 8.5 million segments and 95% of its length. The ETL stages order 5 and above only: 510,179 rows and 77 MB instead of 1.27 GB. `MAJOR_ORDER` in `etl/rivers.py` is both the staging threshold and the reporting one, and lowering it must invalidate what is staged — `hydrorivers_staging_state.min_order` is what detects that. Note that staging is resumed by *features scanned*, not rows stored, because a filtered load's row count no longer says how far through the source file it got. Total modelled drainage is deliberately no longer a metric: `river_length_km` was retired rather than redefined, since keeping the name while changing what it measures would silently change what a threshold means.
+- **A tier only counts what actually hangs beneath it, not what sits lower in
+  `config.LEVELS`.** Cities are parented to states, so no city is a descendant
+  of a county; asking only "does the city level hold regions" is true and would
+  write `city_count = 0` onto all 49,015 counties at 100% coverage. The county
+  tier is what made that reachable. `_populated_child_levels` resolves it by
+  descent for this reason.
 - **Subregion counts are derived from the hierarchy, so they go stale when a
   region import runs.** `state_count`, `city_count` and `country_count` count
   descendants through `parent_id` rather than by re-testing geometry, so they
@@ -207,6 +219,31 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
   written at all — writing `city_count = 0` everywhere would report 100%
   coverage for a number nobody measured.
 - **Elevation**: expose mean, min, and max as three separate metrics rather than picking one canonical "elevation".
+- **"County" means second-level administrative division, and countries disagree
+  about what that is.** The tier is defined by position in each country's own
+  hierarchy, not by size: Brazil contributes 5,570 municipalities, Romania 3,235
+  communes, the US 3,231 counties. The same is already true of states, where
+  Natural Earth gives Malta 68 local councils against the US's 51 — which is
+  also the explanation for Malta's extreme `gdp_ppp` state/country ratio. Never
+  treat a tier as a unit of comparable size.
+- **Only genuine ADM2 is imported as county.** geoBoundaries CGAZ substitutes
+  coarser geometry where it has no second-level data: of 49,349 features, 312
+  are ADM1, 2 are whole countries at ADM0 and 20 are disputed areas. Loading
+  those would answer a county query partly with provinces and countries. A
+  country with no ADM2 gets no counties, making its `county_count` honestly
+  zero. Same reasoning as `MAJOR_ORDER` in `etl/rivers.py`.
+- **County parenting takes the country from the source and only the state from
+  geometry.** geoBoundaries ADM2 and Natural Earth ADM1 are different datasets
+  whose borders do not coincide, so a county near an international border can
+  have its interior point land in the neighbouring country's province. Scoping
+  the geometric search to the county's declared ISO3 country makes cross-border
+  misfiling impossible; the worst remaining error is the wrong province. Use
+  `ST_PointOnSurface`, never the stored centroid — a centroid is not guaranteed
+  to lie inside its own polygon.
+- **`gdp_nominal` stops at the country and always will.** The World Bank
+  publishes national accounts and nothing below them, so state and county GDP is
+  answered by the Kummu grid or refused by name. Do not "fill the gap" by
+  apportioning a national figure down the tiers; that would invent data.
 - **Cities** are point data (GeoNames), not polygons, so raster zonal statistics and polygon intersection do not apply the same way as for the polygon tiers.
 - **Ratio metrics cannot be zonal-averaged.** GDP per capita is output over
   people, so aggregating it needs `sum(GDP) / sum(population)`, not the mean of
@@ -256,7 +293,11 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
   exactly 0.0 either way. Length is cast to `geography` — in degrees it would be
   a number in no unit. Treat the value as comparable, never authoritative:
   coastline length grows without limit as the ruler gets finer, which is why
-  published figures disagree by factors of two to five.
+  published figures disagree by factors of two to five. **Comparable within a
+  tier, not across one:** counties come from geoBoundaries and everything above
+  from Natural Earth 1:50m, so a state's counties total ~36% more coastline than
+  the state itself, where a country's states match it to 0.1%. That is the ruler
+  changing, not the coast, and it is the price of a tier from a second source.
 - **Ring winding order for the globe**: d3-geo takes the *clockwise* side of an exterior ring as the interior, the opposite of RFC 7946. `atlasql/geometry.py` therefore emits `ST_ForcePolygonCW`. On a plane a ring has an inside; on a sphere it only separates two regions, so getting this backwards renders a country as the entire planet minus that country — which reads as a projection bug, not as bad data.
 
 ## Build order

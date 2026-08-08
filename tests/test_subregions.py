@@ -98,15 +98,69 @@ def test_a_region_with_no_subdivisions_counts_zero_rather_than_nothing(counted):
     assert row["zeroes"] > 0
 
 
+def test_a_tier_that_exists_but_is_not_below_gets_no_metric(counted):
+    """Being lower in config.LEVELS is not the same as hanging underneath.
+
+    Cities are parented to states, so no city is a descendant of a county. The
+    first version of this job asked only "does the city level hold regions",
+    which is true, and would have written city_count = 0 onto all 49,015
+    counties and reported it at 100% coverage. Reachability by descent is the
+    question that gives the honest answer.
+    """
+    if not counted.execute(
+        "SELECT 1 FROM regions WHERE level = 'county' LIMIT 1"
+    ).fetchone():
+        pytest.skip("county tier not imported; run import-counties")
+
+    written = counted.execute(
+        """
+        SELECT count(*) AS n FROM metrics m
+        JOIN regions r ON r.id = m.region_id
+        WHERE r.level = 'county' AND m.metric_name = %s
+        """,
+        (CITIES,),
+    ).fetchone()["n"]
+    assert written == 0, f"{written} counties carry a city count they cannot have"
+
+
+def test_counties_are_counted_where_they_do_hang_below(counted):
+    """The other half: counties are genuine descendants of states and countries,
+    so county_count belongs there and nowhere else."""
+    if not counted.execute(
+        "SELECT 1 FROM regions WHERE level = 'county' LIMIT 1"
+    ).fetchone():
+        pytest.skip("county tier not imported")
+
+    rows = counted.execute(
+        """
+        SELECT r.level, count(*) AS n
+        FROM metrics m JOIN regions r ON r.id = m.region_id
+        WHERE m.metric_name = %s
+        GROUP BY r.level
+        """,
+        (metric_name("county"),),
+    ).fetchall()
+    levels = {row["level"] for row in rows}
+    assert levels <= {"continent", "country", "state"}
+    assert {"country", "state"} <= levels
+
+
 def test_an_unpopulated_tier_gets_no_metric_at_all(counted):
     """The other half of the zero decision, and the important one.
 
-    Counties are not imported. Writing county_count = 0 onto every country
-    would report 100% coverage for a number nobody measured, which is exactly
-    the quiet degradation the coverage table exists to prevent.
+    The county tier is imported now, so the metric it would have blocked does
+    exist — but the rule it tested still holds and is what the city/county case
+    above exercises. What remains checkable here is that every registered count
+    metric has values somewhere: a name in the registry with no rows behind it
+    is a metric the UI offers and no query can answer.
     """
     registry = query.registered_metrics(counted)
-    assert metric_name("county") not in registry
+    counts = [name for name in registry if name.endswith("_count")]
+    for name in counts:
+        rows = counted.execute(
+            "SELECT count(*) AS n FROM metrics WHERE metric_name = %s", (name,)
+        ).fetchone()["n"]
+        assert rows > 0, f"{name} is registered but holds no values"
 
 
 def test_each_count_carries_its_own_unit(counted):

@@ -122,9 +122,11 @@ TOTAL_DESCRIPTION = (
     "credited with that whole cell, so small districts are overstated and two "
     "sitting inside one cell can report the same number; and totals do not add "
     "up across a tier, because a cell on a border counts toward both sides — "
-    "summing a country's states overshoots its own total by around 18% at the "
-    "median, and more where the subdivisions are many and small. Compare and "
-    "rank regions with it; do not add them together."
+    "summing a country's states overshoots its own total by around 18%, and "
+    "summing a state's counties overshoots by about 85%, because the smaller "
+    "and more numerous the regions the more border cells there are to count "
+    "twice. Compare and rank regions within a tier with it; never add them "
+    "together, and do not compare a figure at one tier against another."
 )
 
 SOURCE = "Kummu et al. 2025, downscaled gridded GDP per capita PPP (CC BY 4.0)"

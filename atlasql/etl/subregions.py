@@ -91,16 +91,32 @@ ON CONFLICT (region_id, metric_name, year) DO UPDATE SET value = EXCLUDED.value
 """
 
 
+# Which levels actually appear *underneath* regions at the target level. Being
+# lower in config.LEVELS is not enough, and the county tier is what proved it:
+# cities are parented to states, so no city is a descendant of a county. Asking
+# only "does the city level hold regions" would answer yes, write city_count = 0
+# onto all 49,015 counties, and report it at 100% coverage — a number nobody
+# measured, dressed as complete data, which is the exact failure this module was
+# written to avoid. Reachability by descent is the honest question.
+_DESCENDANT_LEVELS_SQL = """
+WITH RECURSIVE tree AS (
+    SELECT id, level, 0 AS depth FROM regions WHERE level = %(level)s
+    UNION ALL
+    SELECT r.id, r.level, t.depth + 1
+    FROM regions r JOIN tree t ON r.parent_id = t.id
+)
+SELECT DISTINCT level FROM tree WHERE depth > 0
+"""
+
+
 def _populated_child_levels(conn, level: str) -> list[str]:
-    """Levels below `level` that actually hold regions, most general first."""
+    """Levels that actually hang below `level` in the hierarchy, most general first."""
     if level not in config.LEVELS:
         raise ValueError(f"unknown level {level!r}; expected one of {config.LEVELS}")
     below = config.LEVELS[config.LEVELS.index(level) + 1 :]
-    rows = conn.execute(
-        "SELECT level FROM regions WHERE level = ANY(%s) GROUP BY level", (list(below),)
-    ).fetchall()
-    populated = {row["level"] for row in rows}
-    return [child for child in below if child in populated]
+    rows = conn.execute(_DESCENDANT_LEVELS_SQL, {"level": level}).fetchall()
+    reachable = {row["level"] for row in rows}
+    return [child for child in below if child in reachable]
 
 
 def _describe(child_level: str) -> tuple[str, str, str, str]:

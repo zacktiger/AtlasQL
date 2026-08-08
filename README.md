@@ -27,6 +27,7 @@ Connection settings default to the docker-compose database. Override with
 python -m atlasql.cli init-db                # apply sql/*.sql, idempotent
 python -m atlasql.cli import-natural-earth   # continents + countries
 python -m atlasql.cli import-states          # states/provinces under countries
+python -m atlasql.cli import-counties        # geoBoundaries ADM2 under states
 python -m atlasql.cli import-cities          # GeoNames cities + population
 python -m atlasql.cli import-world-bank      # GDP per capita and population
 python -m atlasql.cli import-gridded-gdp --level country   # GDP per capita (PPP)
@@ -174,6 +175,7 @@ is the intended answer, not an empty result set.
 | Continent | 7 | coastline, countries within, states within, cities within |
 | Country | 258 | GDP (nominal), GDP (PPP), GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers, coastline, states within, cities within |
 | State | 4,596 | GDP (PPP), GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers, coastline, cities within |
+| County | 49,015 | GDP (PPP), GDP per capita (PPP), coastline |
 | City | 34,026 | GDP per capita (PPP), population, elevation (mean) |
 
 The gaps are the interesting part, and each one is a named refusal rather than
@@ -200,6 +202,20 @@ an empty table:
   than patched because the published total is the exact numerator of the
   published rate, and a narrower mask would make the two contradict each other
   about the same region.
+- **The county tier is second-level administrative division, whatever each
+  country calls it.** Brazil contributes 5,570 municipalities, Romania 3,235
+  communes, the United States 3,231 counties, Japan 1,731 municipalities. These
+  are not comparable units of size or population and the tier does not pretend
+  they are — it is a position in each country's own hierarchy. 176 countries
+  have ADM2 in geoBoundaries; the rest have no counties at all, because CGAZ
+  substitutes provinces and whole countries where it has no second-level data
+  and loading those would answer a county query with states. Elevation, rivers
+  and population do not reach this tier yet — only coastline and the PPP GDP
+  pair, which is what a county query can be answered with today.
+- **County boundaries come from a different source than everything above them**,
+  which is the one place these metrics stop being comparable across tiers. See
+  the coastline note below; the same applies to `gdp_ppp`, where the border-cell
+  double count grows from 18% at the state tier to 85% at the county tier.
 - **Coastline comes from our own boundaries, and is comparable rather than
   authoritative.** `coastline_km` subtracts from each region's outline every
   border a neighbour is on the other side of, so it needs no new source and the
@@ -207,8 +223,12 @@ an empty table:
   exactly 0 — a measurement, which makes `coastline_km == 0` how you find them.
   But coastline length grows without limit as the ruler gets finer, so published
   national figures disagree with each other by factors of two to five and ours
-  will not match any particular one. Measuring every region on the same linework
-  is what makes ranking them mean something.
+  will not match any particular one. Measuring every region at a tier on the same
+  linework is what makes ranking them mean something — within a tier. Across one
+  it does not: counties are drawn by geoBoundaries and everything above them by
+  Natural Earth 1:50m, and the finer outlines give a county tier totalling about
+  36% more coastline than the states containing it, where states match their
+  countries to 0.1%. That gap is the ruler changing, not the coast.
 - **Subnational GDP is downscaled, not reported.** Genuinely subnational
   accounts exist for 89 countries; elsewhere the grid has no subnational signal
   and a country's states differ only by how population is spread. Coverage
@@ -235,10 +255,11 @@ an empty table:
   the one metric family that reaches the continent tier, because the hierarchy
   is the one thing a continent has as much of as anywhere else. `city_count`
   counts the GeoNames cities15000 set, so it means settlements of 15,000 people
-  or more; zero means none above that floor, not none at all. Counties are not
-  imported, and rather than write `county_count = 0` onto every region — which
-  would report 100% coverage for a number nobody measured — the metric simply
-  does not exist.
+  or more; zero means none above that floor, not none at all. And a tier only
+  gets a count for what actually hangs beneath it, which is not the same as
+  what sits lower in the hierarchy: cities are parented to states rather than
+  counties, so counties carry `county_count`'s absence rather than a column of
+  zeroes claiming every county has no cities.
 
 ## Tests
 

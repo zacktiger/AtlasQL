@@ -15,16 +15,29 @@ no CORS middleware anywhere in the app because none has ever been needed. Puttin
 it on a separate static host is possible but is a net loss — see "Why the
 frontend does not go on Vercel" at the end.
 
-The important number: **the tables the API reads restore to about 78 MB, from a
-27 MB dump.** A built AtlasQL database is 167 MB, of which 77 MB is
-`hydrorivers_segments` — the staged river segments the rivers ETL aggregates
-against and nothing reads afterwards — plus a small bookkeeping table beside it.
-Excluding both puts this app inside the free tier of every Postgres host below.
-Check yours:
+The important number: **the tables the API reads restore to about 396 MB, from a
+192 MB dump.** Excluding `hydrorivers_segments` — the staged river segments the
+rivers ETL aggregates against and nothing reads afterwards — plus its small
+bookkeeping table saves a further 77 MB. Check yours, because these numbers
+depend entirely on which tiers you imported:
 
 ```bash
 python -m atlasql.cli serving-size
 ```
+
+**The county tier is 80% of that, and it is optional.** geoBoundaries ADM2 is
+49,015 polygons and takes `regions` from 47 MB to 345 MB on its own. Skip
+`import-counties` and the served database is about **75 MB from a 27 MB dump**,
+which fits any free tier with room to spare; every other tier and every metric
+still works, and a county-level query is refused by name rather than answered
+wrongly. The trade is real in both directions — the county tier is the most
+detailed thing this engine can answer, and it is also the only reason the
+database needs a paid plan on some hosts. Decide before you dump, not after.
+
+| What you imported | Dump | Restored | Free tier? |
+|---|---|---|---|
+| Everything including counties | 192 MB | 396 MB | Neon/Supabase 0.5 GB only, with ~100 MB spare |
+| Everything except counties | 27 MB | 75 MB | Anywhere below |
 
 ## 1. Dump the database
 
@@ -54,10 +67,10 @@ request.
 
 | Host | Postgres | Notes |
 |---|---|---|
-| **Render** | PostGIS on PG 13+ | Blueprint in `render.yaml` deploys app + database from one file. Free web services sleep after 15 min idle; **free Postgres is deleted 30 days after creation**, so use `basic-256mb` for anything you intend to keep. |
+| **Render** | PostGIS on PG 13+ | Blueprint in `render.yaml` deploys app + database from one file. Free web services sleep after 15 min idle; **free Postgres is deleted 30 days after creation**, so use `basic-256mb` for anything you intend to keep — but note 256 MB does not hold the county tier, so either size up or skip it. |
 | **Fly.io** | Managed Postgres, PostGIS ticked at creation | `fly.toml` included. PostGIS is a provisioning option — you cannot add it to an existing cluster. |
 | **Railway** | PostGIS via their Postgres template | Deploys the Dockerfile directly. Hobby plan $5/mo including usage credit. |
-| **Neon** or **Supabase** (database only) | PostGIS available; 0.5 GB free | Pair with any app host. This is the free-and-permanent combination: 78 MB fits comfortably, and neither expires the way Render's free database does. |
+| **Neon** or **Supabase** (database only) | PostGIS available; 0.5 GB free | Pair with any app host. This is the free-and-permanent combination, and neither expires the way Render's free database does. With counties, 396 MB leaves about 100 MB of headroom; without them, 75 MB leaves plenty. |
 | **Any VPS** | `docker compose` | `docker-compose.yml` already runs PostGIS; add the app container beside it. Most control, ~$5/mo, most to maintain. |
 
 **The recommendation, if you want it to stay up and stay free:** Neon or
@@ -70,7 +83,8 @@ one dashboard and one bill, use the Render blueprint with the paid database.
 
 Neon holds the database, Render runs the app. Neon's free tier is 0.5 GB and does
 not expire, which is the reason to prefer it over Render's own free Postgres —
-that one is deleted 30 days after creation.
+that one is deleted 30 days after creation. 0.5 GB is also the only free tier the
+full database with counties still fits in, at 396 MB.
 
 **a. Create the database.** Sign up at neon.tech, create a project on Postgres
 16, and enable PostGIS in their SQL editor:

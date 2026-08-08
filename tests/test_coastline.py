@@ -115,6 +115,44 @@ def test_a_countrys_coast_is_partitioned_among_its_states(coasts):
     assert row["states"] == pytest.approx(row["countries"], rel=0.01)
 
 
+def test_counties_measure_more_coast_than_the_states_holding_them(coasts):
+    """The one place this metric is not comparable across tiers, asserted so it
+    cannot invert unnoticed.
+
+    Counties come from geoBoundaries and everything above them from Natural
+    Earth 1:50m. Finer linework measures more coast, so a state's counties
+    total well above the state itself — about 36% — where a country's states
+    match it to within 0.1% because both are the same source. The number is not
+    the point; the direction and the rough size are, because a county tier that
+    came back *shorter* than its states would mean the subtraction was eating
+    real coastline rather than the ruler having changed.
+    """
+    if not coasts.execute(
+        "SELECT 1 FROM metrics m JOIN regions r ON r.id = m.region_id "
+        "WHERE m.metric_name = %s AND r.level = 'county' LIMIT 1",
+        (METRIC,),
+    ).fetchone():
+        pytest.skip("county coastline not computed; run import-coastline --level county")
+
+    row = coasts.execute(
+        """
+        SELECT sum(state_km) AS states, sum(county_km) AS counties
+        FROM (
+            SELECT ms.value AS state_km, sum(mc.value) AS county_km
+            FROM regions s
+            JOIN metrics ms ON ms.region_id = s.id AND ms.metric_name = %(metric)s
+            JOIN regions ct ON ct.parent_id = s.id AND ct.level = 'county'
+            JOIN metrics mc ON mc.region_id = ct.id AND mc.metric_name = %(metric)s
+            WHERE s.level = 'state'
+            GROUP BY s.id, ms.value
+        ) AS per_state
+        """,
+        {"metric": METRIC},
+    ).fetchone()
+    ratio = row["counties"] / row["states"]
+    assert 1.1 < ratio < 1.8, f"county/state coastline ratio {ratio:.3f}"
+
+
 def test_continents_are_not_all_landlocked(coasts):
     """The regression this metric shipped with a bug for.
 

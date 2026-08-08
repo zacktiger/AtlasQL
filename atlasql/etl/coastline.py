@@ -44,9 +44,19 @@ The honesty caveat, which is in the metric description because users need it:
 coastline length is famously scale-dependent — measure with a finer ruler and
 you get a longer answer, without limit. Published national figures disagree with
 each other by factors of two to five for exactly this reason, and ours will not
-match any particular one of them. What it does do is measure every region on the
-same linework at the same generalisation, which is what makes comparing and
-ranking them meaningful. That is the question this engine asks.
+match any particular one of them. What it does do is measure every region at a
+tier on the same linework, which is what makes comparing and ranking them
+meaningful. That is the question this engine asks.
+
+The caveat has a sharp edge once the county tier exists, because that tier is
+the first whose boundaries come from somewhere else. Continents, countries and
+states are Natural Earth 1:50m; counties are geoBoundaries, drawn finer. Summing
+a state's counties gives about 36% more coastline than the state itself reports,
+where summing a country's states matches it to within 0.1%. Nothing is wrong in
+either number — they are the same coast measured with two rulers — but it means
+`coastline_km` compares within a tier and not across one, and that an `auto`
+query which used to land on states now lands on counties and returns
+systematically larger figures.
 """
 
 from __future__ import annotations
@@ -70,19 +80,22 @@ UNSUPPORTED_LEVELS = ("city",)
 
 DESCRIPTION = (
     "Length of the region's boundary that faces open water, measured on the "
-    f"spheroid from Natural Earth {SCALE} boundaries — the same outlines this "
-    "engine draws — by subtracting every border it shares with a neighbouring "
-    "region or country. Landlocked regions are 0, which is a measurement rather "
-    "than a gap, so `coastline_km == 0` is how you find them. Treat the number "
-    "as comparable rather than authoritative: coastline length grows without "
-    "limit as the ruler gets finer, which is why published national figures "
-    f"disagree with each other by factors of two to five. Measuring every region "
-    "on the same linework at the same generalisation is what makes ranking them "
-    "mean something; matching any particular published figure is not something "
-    "any single number can do."
+    "spheroid from the boundaries this engine draws, by subtracting every border "
+    "it shares with a neighbouring region or country. Landlocked regions are 0, "
+    "which is a measurement rather than a gap, so `coastline_km == 0` is how you "
+    "find them. Treat the number as comparable rather than authoritative: "
+    "coastline length grows without limit as the ruler gets finer, which is why "
+    "published national figures disagree with each other by factors of two to "
+    "five. Measuring every region at a tier on the same linework is what makes "
+    "ranking them mean something; matching a particular published figure is not "
+    "something any single number can do. Compare within a tier, not across one: "
+    f"continents, countries and states are measured on Natural Earth {SCALE} "
+    "while counties come from geoBoundaries, whose finer outlines give a county "
+    "tier that totals about 36% more coastline than the states containing it. "
+    "That gap is the ruler changing, not the coast."
 )
 
-SOURCE = f"Derived from Natural Earth {SCALE} boundaries"
+SOURCE = f"Derived from the loaded boundaries (Natural Earth {SCALE}; geoBoundaries ADM2 for counties)"
 
 # The country term needs two guards, and both were bugs before they were guards.
 #
