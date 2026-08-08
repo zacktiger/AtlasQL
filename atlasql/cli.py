@@ -68,6 +68,12 @@ def _import_rivers(args: argparse.Namespace) -> None:
     rivers.import_rivers(level=args.level)
 
 
+def _import_coastline(args: argparse.Namespace) -> None:
+    from atlasql.etl import coastline
+
+    coastline.import_coastline(level=args.level)
+
+
 def _import_subregions(args: argparse.Namespace) -> None:
     from atlasql.etl import subregions
 
@@ -146,6 +152,8 @@ def _human(n: int) -> str:
 # much of as anything else, and it is the only level where country_count exists.
 MEASURED_LEVELS = tuple(level for level in config.LEVELS if level != "continent")
 ALL_LEVELS = config.LEVELS
+# Anything measured off an outline. Cities are point data and have none.
+POLYGON_LEVELS = tuple(level for level in config.LEVELS if level != "city")
 
 # name -> (handler, help, --level choices or None)
 COMMANDS = {
@@ -184,6 +192,11 @@ COMMANDS = {
         _import_rivers,
         "Stage HydroRIVERS and aggregate river length/count for one level",
         MEASURED_LEVELS,
+    ),
+    "import-coastline": (
+        _import_coastline,
+        "Measure the boundary facing open water for one level (no download)",
+        POLYGON_LEVELS,
     ),
     "import-subregions": (
         _import_subregions,
