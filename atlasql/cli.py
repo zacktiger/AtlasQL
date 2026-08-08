@@ -38,6 +38,12 @@ def _import_states(_: argparse.Namespace) -> None:
     natural_earth.import_states()
 
 
+def _import_counties(_: argparse.Namespace) -> None:
+    from atlasql.etl import geo_boundaries
+
+    geo_boundaries.import_counties()
+
+
 def _import_cities(_: argparse.Namespace) -> None:
     from atlasql.etl import geonames
 
@@ -166,6 +172,11 @@ COMMANDS = {
     "import-states": (
         _import_states,
         "Import Natural Earth states and provinces under their countries",
+        None,
+    ),
+    "import-counties": (
+        _import_counties,
+        "Import geoBoundaries ADM2 counties under their states",
         None,
     ),
     "import-cities": (
