@@ -35,6 +35,7 @@ docker compose up -d                          # PostGIS on localhost:55432
 .venv/Scripts/python -m atlasql.cli import-gridded-gdp --level state
 .venv/Scripts/python -m atlasql.cli import-elevation --level country
 .venv/Scripts/python -m atlasql.cli import-rivers --level state
+.venv/Scripts/python -m atlasql.cli import-coastline --level country
 .venv/Scripts/python -m atlasql.cli import-subregions --level country
 .venv/Scripts/python -m pytest                # DB tests skip if it is not up
 .venv/Scripts/python -m uvicorn atlasql.api:app --reload
@@ -213,11 +214,49 @@ The second pivot is that **`metric_availability` drives level auto-detection**. 
   cities and read New York State at 79.6k against a real 112k. Any future
   metric of the form "x per y" has the same trap; elevation does not, which is
   why the elevation job's plain cell mean is fine.
-- **Two GDP metrics exist and must stay separate.** `gdp_per_capita` (World
-  Bank, current US$, country only) and `gdp_per_capita_ppp` (Kummu gridded,
-  2021 int$, all tiers). Merging them under one name would put one unit on a
-  registry entry that is wrong at half the levels, and make a numeric threshold
-  mean different things at different levels.
+- **Four GDP metrics exist on two axes and must stay separate.** Nominal against
+  PPP, and total against per head: `gdp_nominal` and `gdp_per_capita` (World
+  Bank, current US$, country only), `gdp_ppp` (Kummu gridded, 2021 int$,
+  country and state) and `gdp_per_capita_ppp` (same source, and cities too).
+  Merging any pair would put one unit on a registry entry that is wrong at half
+  the levels, and make a numeric threshold mean different things at different
+  levels. The axes are not decorative: at market rates the United States is the
+  largest economy and at PPP China is, so a single "GDP" would have to pick one
+  answer to a question that has two.
+- **Do not derive per capita from a total and a population.** The World Bank's
+  series do not always cover the same territory: Cyprus's GDP covers the
+  government-controlled area while `SP.POP.TOTL` counts the whole island, which
+  puts the derived figure 39% below the reported one, and Ukraine, Russia,
+  Morocco and Tanzania differ by a few percent over Crimea, Western Sahara and
+  Zanzibar. `gdp_per_capita` stores what the Bank reports, because that is the
+  number with a consistent denominator behind it. 194 of 199 countries do
+  reconcile, which is what makes the check worth running as a test.
+- **`gdp_ppp` does not add up across a tier, and that is `all_touched`.** The
+  gridded jobs count every cell a boundary clips, so a cell on a border counts
+  toward both sides. Summing a country's states overshoots its own total by
+  about 18% at the median — never undershoots, measured across 170 countries —
+  and by more where subdivisions are many and small (≤10 states: 1.09; ≥50:
+  1.64). A region smaller than a 5 arc-minute cell is credited with that whole
+  cell, so two Hong Kong districts inside one cell report identical totals. None
+  of this shows in `gdp_per_capita_ppp`, where it cancels in the ratio; it
+  appears the moment a total is published. It is documented rather than fixed
+  because the published total is the exact numerator of the published rate, and
+  narrowing the mask would buy additivity at the price of the two metrics
+  contradicting each other about the same region. Rank with it, do not sum it.
+- **Coastline is measured off our own boundaries, and is scale-dependent.**
+  `coastline_km` is the region's outline minus every border another landmass is
+  on the other side of — no new source, so the number and the globe cannot
+  disagree. Two subtractions, both of which were bugs before they were guards:
+  the neighbouring-country term applies only *below* the country tier (applied
+  at continent level it subtracts every country the continent is made of and
+  reports all seven as landlocked), and it excludes the region's *ancestor*
+  country rather than its parent (identical for a state, wrong for a county).
+  No epsilon is needed and that is measured, not assumed: buffering neighbours
+  by 0.001° moves the result under 0.01%, and every landlocked region lands on
+  exactly 0.0 either way. Length is cast to `geography` — in degrees it would be
+  a number in no unit. Treat the value as comparable, never authoritative:
+  coastline length grows without limit as the ruler gets finer, which is why
+  published figures disagree by factors of two to five.
 - **Ring winding order for the globe**: d3-geo takes the *clockwise* side of an exterior ring as the interior, the opposite of RFC 7946. `atlasql/geometry.py` therefore emits `ST_ForcePolygonCW`. On a plane a ring has an inside; on a sphere it only separates two regions, so getting this backwards renders a country as the entire planet minus that country — which reads as a projection bug, not as bad data.
 
 ## Build order

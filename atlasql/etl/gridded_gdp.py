@@ -61,6 +61,11 @@ log = logging.getLogger(__name__)
 
 METRIC = "gdp_per_capita_ppp"
 
+# Total output under the boundary: the numerator the per-capita figure is
+# already built from, published rather than discarded. It exists only where
+# there is a boundary to total under — see `TOTAL_UNSUPPORTED_LEVELS`.
+TOTAL_METRIC = "gdp_ppp"
+
 ZENODO_RECORD = "18429133"
 BASE_URL = f"https://zenodo.org/api/records/{ZENODO_RECORD}/files/{{}}/content"
 
@@ -78,6 +83,13 @@ GDP_PER_CAPITA_RASTER = "rast_adm2_gdp_perCapita_1990_2024.tif"
 # figures is a number nobody would want.
 UNSUPPORTED_LEVELS = ("continent",)
 
+# A city is a point. Sampling the per-capita grid at a location is meaningful —
+# it is the rate where the city stands — but there is no area to total output
+# over, and the grid cell a city sits in is not the city's economy. So the total
+# is a polygon-tier metric, absent at city level rather than guessed, exactly as
+# elevation_min and elevation_max are.
+TOTAL_UNSUPPORTED_LEVELS = ("continent", "city")
+
 DESCRIPTION = (
     "Gross domestic product per person at purchasing power parity, in constant "
     "2021 international dollars. Downscaled from reported subnational accounts "
@@ -91,11 +103,40 @@ DESCRIPTION = (
     "distributed."
 )
 
+TOTAL_DESCRIPTION = (
+    "Total economic output inside the region at purchasing power parity, in "
+    "constant 2021 international dollars, totalled from a 5 arc-minute grid "
+    "over the region's boundary. This is the same sum that gdp_per_capita_ppp "
+    "divides by its population, over the same cells, so the two are consistent "
+    "with each other by construction and their ratio is the population the "
+    "grid puts inside the boundary. Unlike gdp_nominal it reaches subnational "
+    "tiers, and unlike gdp_nominal it is at PPP rather than market exchange "
+    "rates — the two are different units and a threshold means different "
+    "things to each. It is a gridded total rather than a national account, so "
+    "it approaches published figures without reproducing them, and the same "
+    "downscaling limit applies: genuinely subnational accounts exist for 89 "
+    "countries, and elsewhere a region's share reflects how population is "
+    "distributed rather than measured output. Two consequences of totalling "
+    "over a grid, which do not affect the per-capita figure because they "
+    "cancel in its ratio: a region smaller than a 5 arc-minute cell is "
+    "credited with that whole cell, so small districts are overstated and two "
+    "sitting inside one cell can report the same number; and totals do not add "
+    "up across a tier, because a cell on a border counts toward both sides — "
+    "summing a country's states overshoots its own total by around 18% at the "
+    "median, and more where the subdivisions are many and small. Compare and "
+    "rank regions with it; do not add them together."
+)
+
 SOURCE = "Kummu et al. 2025, downscaled gridded GDP per capita PPP (CC BY 4.0)"
 
 
-def register_metric(conn) -> None:
-    """Put the PPP GDP metric in the live registry."""
+def register_metric(conn, totals: bool = False) -> None:
+    """Put the PPP GDP metrics in the live registry.
+
+    The total is registered only when it is about to be written. Registering it
+    from a city-tier run would advertise a metric this database holds no values
+    for at any level.
+    """
     db.register_metric(
         conn,
         metric_name=METRIC,
@@ -104,6 +145,15 @@ def register_metric(conn) -> None:
         description=DESCRIPTION,
         source=SOURCE,
     )
+    if totals:
+        db.register_metric(
+            conn,
+            metric_name=TOTAL_METRIC,
+            label="GDP (PPP)",
+            unit="2021 int$",
+            description=TOTAL_DESCRIPTION,
+            source=SOURCE,
+        )
 
 
 def _band_for_year(path, year: int | None) -> tuple[int, int]:
@@ -148,6 +198,7 @@ def import_gridded_gdp(level: str = "state", year: int | None = None) -> None:
     band, vintage = _band_for_year(per_capita_path, year)
     log.info("using %s band %d (%d)", per_capita_path.name, band, vintage)
 
+    totals_wanted = level not in TOTAL_UNSUPPORTED_LEVELS
     points = points_for(level)
     if points:
         rows = _sample_points(points, per_capita_path, band, vintage)
@@ -167,17 +218,21 @@ def import_gridded_gdp(level: str = "state", year: int | None = None) -> None:
         total = len(areas)
 
     with db.connect() as conn:
-        register_metric(conn)
+        register_metric(conn, totals=totals_wanted)
         upsert_metrics(conn, rows)
         availability.refresh(conn)
 
+    # Counted per metric rather than per row: the polygon path emits two rows
+    # per region, so len(rows) is no longer a count of regions covered.
+    covered = sum(1 for row in rows if row["metric_name"] == METRIC)
     log.info(
-        "%s: %d of %d %s regions covered (%.0f%%)",
+        "%s: %d of %d %s regions covered (%.0f%%)%s",
         METRIC,
-        len(rows),
+        covered,
         total,
         level,
-        100 * len(rows) / total if total else 0.0,
+        100 * covered / total if total else 0.0,
+        f"; {TOTAL_METRIC} written for the same regions" if totals_wanted else "",
     )
 
 
@@ -239,11 +294,26 @@ def _aggregate_areas(
             if population <= 0:
                 continue
 
+            # Both metrics from the same masked sum, so the published total is
+            # exactly the numerator behind the published rate. Totalling over a
+            # wider mask — every cell with GDP, including those the rate grid
+            # has no value for — would capture marginally more output at the
+            # cost of the two metrics disagreeing about the same region, and a
+            # user dividing one by the other getting a population that matches
+            # neither.
             rows.append(
                 {
                     "region_id": area["id"],
                     "metric_name": METRIC,
                     "value": gdp_sum / population,
+                    "year": vintage,
+                }
+            )
+            rows.append(
+                {
+                    "region_id": area["id"],
+                    "metric_name": TOTAL_METRIC,
+                    "value": gdp_sum,
                     "year": vintage,
                 }
             )

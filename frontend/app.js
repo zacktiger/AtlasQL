@@ -656,6 +656,18 @@ function showTooltip(feature, position) {
 
 function formatNumber(value) {
   const abs = Math.abs(value);
+  // Past a billion the extra digits stop informing and start obscuring. A GDP
+  // total renders as fifteen characters of false precision — the gridded source
+  // does not support anywhere near that many significant figures — and the two
+  // ends of the map legend become unreadable side by side, which is the one
+  // place a number has to be taken in at a glance. Three significant figures is
+  // both what fits and what the data can honestly claim.
+  if (abs >= 1e9) {
+    return value.toLocaleString(undefined, {
+      notation: "compact",
+      maximumSignificantDigits: 3,
+    });
+  }
   const digits = abs >= 100 ? 0 : abs >= 1 ? 1 : 3;
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }

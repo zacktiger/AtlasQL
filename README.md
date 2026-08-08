@@ -37,6 +37,9 @@ python -m atlasql.cli import-elevation --level country
 python -m atlasql.cli import-elevation --level state
 python -m atlasql.cli import-rivers --level country
 python -m atlasql.cli import-rivers --level state
+python -m atlasql.cli import-coastline --level continent   # boundary facing
+python -m atlasql.cli import-coastline --level country     # open water; needs
+python -m atlasql.cli import-coastline --level state       # no download
 python -m atlasql.cli import-subregions --level continent  # how many lower-tier
 python -m atlasql.cli import-subregions --level country    # regions are inside
 python -m atlasql.cli import-subregions --level state      # each region
@@ -168,22 +171,44 @@ is the intended answer, not an empty result set.
 
 | Tier | Regions | Metrics |
 |---|---|---|
-| Continent | 7 | countries within, states within, cities within |
-| Country | 258 | GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers, states within, cities within |
-| State | 4,596 | GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers, cities within |
+| Continent | 7 | coastline, countries within, states within, cities within |
+| Country | 258 | GDP (nominal), GDP (PPP), GDP per capita, GDP per capita (PPP), population, elevation (mean/min/max), major river length, major rivers, coastline, states within, cities within |
+| State | 4,596 | GDP (PPP), GDP per capita (PPP), elevation (mean/min/max), major river length, major rivers, coastline, cities within |
 | City | 34,026 | GDP per capita (PPP), population, elevation (mean) |
 
 The gaps are the interesting part, and each one is a named refusal rather than
 an empty table:
 
-- **Two GDP metrics, deliberately not merged.** `gdp_per_capita` is the World
-  Bank's national figure in current US dollars and exists at country level
-  only, because the Bank reports nothing below it. `gdp_per_capita_ppp` is the
-  Kummu downscaled dataset in 2021 international dollars and reaches every
-  tier. They are different units, so one name covering both would make
-  `> 40000` mean two different things depending on which level auto-detection
-  picked. Asking for the World Bank metric below the country tier is still a
-  named refusal.
+- **Four GDP metrics on two axes, deliberately not merged.** Nominal against
+  PPP and total against per head. `gdp_nominal` and `gdp_per_capita` are the
+  World Bank's figures in current US dollars, country level only, because the
+  Bank reports nothing below it. `gdp_ppp` and `gdp_per_capita_ppp` come from
+  the Kummu downscaled dataset in 2021 international dollars; the per-capita one
+  reaches every tier, the total stops at states because a city is a point with
+  no area to total output over. Different units, so one name covering two would
+  make `> 40000` mean different things depending on which level auto-detection
+  picked — and the axes carry real disagreement, since at market rates the
+  United States is the largest economy while at PPP China is. Asking for a World
+  Bank metric below the country tier is still a named refusal.
+- **`gdp_ppp` ranks but does not sum.** Every gridded job counts each cell a
+  boundary clips, so a cell on a border counts toward both sides. Adding up a
+  country's states overshoots its own total by around 18% at the median, and by
+  more where subdivisions are many and small; a region smaller than a 5
+  arc-minute cell is credited with that whole cell, which is why two Hong Kong
+  districts inside one cell report the same number. None of this is visible in
+  the per-capita figure, where it cancels in the ratio. It is left in rather
+  than patched because the published total is the exact numerator of the
+  published rate, and a narrower mask would make the two contradict each other
+  about the same region.
+- **Coastline comes from our own boundaries, and is comparable rather than
+  authoritative.** `coastline_km` subtracts from each region's outline every
+  border a neighbour is on the other side of, so it needs no new source and the
+  number cannot disagree with the coastline on the globe. Landlocked regions are
+  exactly 0 — a measurement, which makes `coastline_km == 0` how you find them.
+  But coastline length grows without limit as the ruler gets finer, so published
+  national figures disagree with each other by factors of two to five and ours
+  will not match any particular one. Measuring every region on the same linework
+  is what makes ranking them mean something.
 - **Subnational GDP is downscaled, not reported.** Genuinely subnational
   accounts exist for 89 countries; elsewhere the grid has no subnational signal
   and a country's states differ only by how population is spread. Coverage
